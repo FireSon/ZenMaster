@@ -1,0 +1,218 @@
+{
+  "grid": {
+    "max_kw": 17.0
+  },
+  "latitude": 52.07704264717319,
+  "longitude": 5.499350541375222,
+  "timezone": "Europe/Amsterdam",
+  "solar_panels": [
+    {
+      "name": "roof_south",
+      "power_wp": 8580,
+      "tilt": 60.0,
+      "orientation": 170.0,
+      "inverter_ac_w": 10000,
+      "production_entity": "sensor.inverter_daily_yield",
+      "power_entity": "sensor.inverter_active_power"
+    },
+    {
+      "name": "roof_east",
+      "power_wp": 1200,
+      "tilt": 30.0,
+      "orientation": 80.0,
+      "inverter_ac_w": 10000,
+      "production_entity": "sensor.inverter_daily_yield",
+      "power_entity": "sensor.inverter_active_power"
+    },
+    {
+      "name": "roof_west",
+      "power_wp": 1200,
+      "tilt": 30.0,
+      "orientation": 260.0,
+      "inverter_ac_w": 10000,
+      "production_entity": "sensor.inverter_daily_yield",
+      "power_entity": "sensor.inverter_active_power"
+    },
+    {
+      "name": "SF800-1",
+      "power_wp": 900,
+      "tilt": 20.0,
+      "orientation": 260.0,
+      "production_entity": "sensor.sf800_1_solar_aggr",
+      "power_entity": "sensor.sf800_1_solar"
+    },
+    {
+      "name": "SF800-2",
+      "power_wp": 900,
+      "tilt": 20.0,
+      "orientation": 260.0,
+      "production_entity": "sensor.sf800_2_solar_aggr",
+      "power_entity": "sensor.sf800_2_solar"
+    }
+  ],
+  "solar": {},
+  "price": {
+    "provider": "frank",
+    "country": "NL",
+    "saldering": true
+  },
+  "zendure": {
+    "id": "zendure",
+    "soc_entity": "sensor.zendure_manager_available_kwh",
+    "efficiency": 0.9,
+    "initial_soc": 0.3,
+    "min_soc": 0.1,
+    "max_soc": 0.94,
+    "reserve_kwh": 3.0,
+    "devices": {
+      "p0S70q2x": {
+        "name": "SF800PRO-1",
+        "prodkey": "R3mn8U",
+        "model": "SF800PRO",
+        "sn": "EOA1NHN3N180450",
+        "ip": "192.168.2.5",
+        "blemac": "34:CD:B0:8D:42:32",
+        "phase": ""
+      },
+      "MPEt6K1P": {
+        "name": "SF2400AC-1",
+        "prodkey": "BC8B7F",
+        "model": "SF2400AC",
+        "sn": "HOA1NPN3N210137",
+        "ip": "192.168.2.3",
+        "blemac": "34:CD:B0:8E:DA:7A",
+        "phase": ""
+      },
+      "Cd3wbW9V": {
+        "name": "SF1600AC-1",
+        "prodkey": "65174u",
+        "model": "SF1600AC_PLUS",
+        "sn": "HED4NENBN470562",
+        "ip": "192.168.2.40",
+        "blemac": "98:A3:16:51:80:D6",
+        "phase": ""
+      },
+      "Vw6mE0cP": {
+        "name": "SF2400PRO-1",
+        "prodkey": "2Qe7C9",
+        "model": "SF2400PRO",
+        "sn": "EEB4AENCN520045",
+        "ip": "192.168.2.32",
+        "blemac": "80:F1:B2:F2:1D:66",
+        "phase": ""
+      },
+      "S2TG2830": {
+        "name": "SF800-1",
+        "prodkey": "a4ss5P",
+        "model": "SF800",
+        "sn": "WOB1NHMCN032390",
+        "ip": "192.168.2.17",
+        "blemac": "34:CD:B0:65:AC:F2",
+        "phase": ""
+      },
+      "1AvGvT1g": {
+        "name": "SF800-2",
+        "prodkey": "a4ss5P",
+        "model": "SF800",
+        "sn": "WOB1NHMCN032288",
+        "ip": "192.168.2.18",
+        "blemac": "34:CD:B0:55:50:4E",
+        "phase": ""
+      },
+      "BVng8146": {
+        "name": "SolarFlow 2400 AC Plus",
+        "prodkey": "5fG27j",
+        "model": "SF2400AC_PLUS",
+        "sn": "HEC4AENCN520012",
+        "ip": null,
+        "blemac": null,
+        "phase": ""
+      },
+      "9RUB1mW7": {
+        "name": "Hyper 2000",
+        "prodkey": "gDa3tb",
+        "model": "HYPER2000",
+        "sn": "EE1LHNBTN151322",
+        "ip": null,
+        "blemac": null,
+        "phase": ""
+      }
+    },
+    "smartmeters": {
+      "A0r9v5UC": {
+        "name": "P1 Meter",
+        "prodkey": "q331b1",
+        "model_name": "SmartMeter P1"
+      }
+    }
+  },
+  "consumers": [
+    {
+      "type": "Heating",
+      "id": "heating1",
+      "name": "Woonkamer",
+      "kind": "house",
+      "temp_entity": "sensor.fs_ahu_verventa_temperature",
+      "power_entity": "sensor.fs_evcharger_sdm220m_total_power",
+      "max_power": 2.5,
+      "t_min": 19.0,
+      "t_max": 22.0,
+      "t_target": 20.0,
+      "phase": 1
+    },
+    {
+      "id": "ev1",
+      "type": "ElectricVehicle",
+      "charge_power_entity": "",
+      "soc_entity": "",
+      "connected_entity": "",
+      "connected": true,
+      "current_soc": 0.2,
+      "target_soc": 0.6,
+      "ev_max_soc": 0.8,
+      "capacity_kwh": 60.0,
+      "max_power_kw": 11.0,
+      "efficiency": 0.9,
+      "charge_compensation_eur_kwh": 0.35,
+      "departure_time": "07:00",
+      "phase": 1
+    },
+    {
+      "id": "dishwasher1",
+      "type": "Appliance",
+      "kind": "dishwasher",
+      "switch_entity": "",
+      "power_entity": "sensor.power_usage_28df8",
+      "armed": true,
+      "power_rating": 2.0,
+      "cycle_duration_slots": 6,
+      "latest_start_time": "08:00",
+      "phase": 1
+    },
+    {
+      "id": "washingmachine1",
+      "type": "Appliance",
+      "kind": "washingmachine",
+      "switch_entity": "",
+      "power_entity": "sensor.power_usage_28bc3",
+      "armed": true,
+      "power_rating": 2.0,
+      "cycle_duration_slots": 6,
+      "latest_start_time": "10:00",
+      "phase": 1
+    },
+    {
+      "id": "dryer1",
+      "type": "Appliance",
+      "kind": "dryer",
+      "switch_entity": "",
+      "power_entity": "sensor.power_usage_295d6",
+      "armed": false,
+      "power_rating": 2.5,
+      "cycle_duration_slots": 6,
+      "latest_start_time": "18:00",
+      "phase": 1
+    }
+  ],
+  "expert": true
+}

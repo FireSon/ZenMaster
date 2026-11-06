@@ -1,0 +1,38 @@
+{
+  "name": "ZenMaster HA Development",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {}
+  },
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && if [ ! -f /home/vscode/.claude/.claude.json ]; then if [ -f /home/vscode/.claude.json ] && [ ! -L /home/vscode/.claude.json ]; then mv /home/vscode/.claude.json /home/vscode/.claude/.claude.json; else touch /home/vscode/.claude/.claude.json; fi; fi && ln -sf /home/vscode/.claude/.claude.json /home/vscode/.claude.json && npm install -g @anthropic-ai/claude-code && scripts/setup",
+  "forwardPorts": [
+    8123
+  ],
+  "mounts": [
+    "source=zendure-claude,target=/home/vscode/.claude,type=volume"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "charliermarsh.ruff",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.mypy-type-checker",
+        "ms-python.debugpy",
+        "ryanluker.vscode-coverage-gutters",
+        "github.vscode-pull-request-github"
+      ],
+      "settings": {
+        "python.testing.pytestEnabled": true,
+        "python.defaultInterpreterPath": "/usr/local/bin/python3",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      }
+    }
+  }
+}
