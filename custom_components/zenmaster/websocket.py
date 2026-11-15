@@ -144,7 +144,7 @@ async def ws_save_schema(hass, connection, msg):
         connection.send_error(msg["id"], "not_found", msg["section"])
         return
     # a device with a subentry is kept there; the Store only holds distribution, the drivers and prices
-    if not getattr(device, "subentry_id", None):
+    if device is coord.distribution or not getattr(device, "subentry_id", None):
         coord.config.serialize(device, msg["section"], coord.config.payload)
         await coord.config.save()
     if getattr(device, "subentry_id", None) and coord.persist_device(device):
@@ -182,6 +182,10 @@ async def ws_subentry_add(hass, connection, msg):
             return
         data |= found
         data["sn"] = str(data.get(getattr(driver, "KEY", "sn"), ""))  # the field that identifies the device becomes its serial
+        # without a serial the device gets a nameless id and its MQTT reports can never be matched to it
+        if not data["sn"]:
+            connection.send_result(msg["id"], {"ok": False, "errors": ["sn_missing"]})
+            return
         # a device that is already there or of an unknown product is refused
         if any(s.data.get("sn") == data["sn"] for s in coord.entry.subentries.values()):
             connection.send_result(msg["id"], {"ok": False, "errors": ["device_exists"]})
