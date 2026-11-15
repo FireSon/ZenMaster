@@ -12,6 +12,7 @@ from custom_components.zenmaster.solver.dynamicprices import (
     energycharts,
     frank,
     nextenergy,
+    nomos,
     tibber,
     zonneplan,
 )
@@ -189,6 +190,27 @@ def test_tibber(monkeypatch):
     assert buy[16] == pytest.approx(0.40) and sell[16] == pytest.approx(0.25)
     delta = ((0.30 - 0.18) * 4 + (0.40 - 0.25) * 4) / 8
     assert buy[20] == pytest.approx(RAW + delta)   # tail = sell + mean(buy - sell)
+    assert buy[0] == pytest.approx(RAW) and buy[11] == pytest.approx(RAW)
+
+
+def test_nomos(monkeypatch):
+    # token, subscription list and prices answered in that order; hourly items in ct/kWh from now
+    stub_base(monkeypatch)
+    items = [
+        {"timestamp": NOW.isoformat(), "amount": 30.0, "components": [{"type": "electricity", "amount": 18.0}, {"type": "grid", "amount": 9.0}, {"type": "levies", "amount": 3.0}]},
+        {"timestamp": (NOW + timedelta(hours=1)).isoformat(), "amount": 40.0, "components": [{"type": "electricity", "amount": 25.0}, {"type": "grid", "amount": 9.0}, {"type": "levies", "amount": 6.0}]},
+    ]
+    payloads = iter([{"access_token": "AT"}, {"items": [{"id": "sub_old", "status": "ended"}, {"id": "sub_1", "status": "active"}]}, {"resolution": "hourly", "items": items}])
+    session = type("S", (), {"post": lambda self, *a, **k: _Resp(next(payloads)), "get": lambda self, *a, **k: _Resp(next(payloads))})()
+    monkeypatch.setattr(nomos, "async_get_clientsession", lambda *a, **k: session)
+    o = make_dp("NomosProvider")
+    o.client_id, o.client_secret = "id", "secret"
+    fetch(nomos.NomosProvider(), o)
+    buy, sell = o.price_buy.data, o.price_sell.data
+    assert buy[12] == pytest.approx(0.30) and sell[12] == pytest.approx(0.18)
+    assert buy[16] == pytest.approx(0.40) and sell[16] == pytest.approx(0.25)
+    delta = ((0.30 - 0.18) * 4 + (0.40 - 0.25) * 4) / 8
+    assert buy[20] == pytest.approx(RAW + delta)   # tail = spot + mean(buy - spot)
     assert buy[0] == pytest.approx(RAW) and buy[11] == pytest.approx(RAW)
 
 
