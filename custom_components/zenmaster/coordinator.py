@@ -512,7 +512,9 @@ class Coordinator:
             unsub()
         self._p1_unsubs.clear()
         # every power entity on the P1 device goes on its phase (0 = the grid total) with a signed watt factor, except the capacity tariff's peak and average; only the total entities trigger
-        entries = er.async_entries_for_device(er.async_get(self.hass), device_id)
+        # its sub-devices count as the meter too: Shelly puts each phase of a Pro 3EM on a child device
+        ids = [device_id, *(d.id for d in dr.async_get(self.hass).devices.values() if device_id in (d.via_device_id, getattr(d, "parent_device_id", None)))]
+        entries = [e for i in ids for e in er.async_entries_for_device(er.async_get(self.hass), i)]
         states = getattr(self.hass, "states", None)  # absent offline (tests/tools), then the registry is all there is
         entities = []
         for e in entries:

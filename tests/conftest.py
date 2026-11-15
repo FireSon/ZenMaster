@@ -86,7 +86,7 @@ _selector.selector = lambda config: (lambda value: value)
 # the registry entry a device creates is read back (config_entries_subentries, id): a plain object, not a chainable dummy
 import homeassistant.helpers.device_registry as _dr  # noqa: E402
 
-_dr.async_get = lambda hass: types.SimpleNamespace(async_get_or_create=lambda **kwargs: types.SimpleNamespace(id="dev", config_entries_subentries={}), async_update_device=lambda *args, **kwargs: None, async_get_device=lambda **kwargs: None)
+_dr.async_get = lambda hass: types.SimpleNamespace(async_get_or_create=lambda **kwargs: types.SimpleNamespace(id="dev", config_entries_subentries={}), async_update_device=lambda *args, **kwargs: None, async_get_device=lambda **kwargs: None, devices={})
 
 # a child device asks DeviceInfo which parent link this HA knows; the stub answers like an HA before 2026.8
 _dr.DeviceInfo.__optional_keys__ = frozenset()
