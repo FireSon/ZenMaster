@@ -1014,6 +1014,7 @@
       },
       "error": {
         "device_exists": "Cet appareil est déjà ajouté",
+        "sn_missing": "Saisissez le numéro de série",
         "unknown_product": "Modèle inconnu",
         "cannot_connect": "Aucune réponse à cette adresse",
         "invalid_auth": "Nom d'utilisateur ou mot de passe incorrect"
