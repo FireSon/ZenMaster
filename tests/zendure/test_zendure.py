@@ -102,17 +102,6 @@ def test_power_local_publishes_the_limits() -> None:
     asyncio.run(scenario())
 
 
-def test_power_cloud_publishes_like_local() -> None:
-    async def scenario() -> None:
-        d = make_device()
-        d.connection = ConnectionType.CLOUD
-        d.power(300, DistributionMode.MANUAL)
-        assert len(d.mqtt.published) == 1  # one property write
-        d.unload()
-
-    asyncio.run(scenario())
-
-
 def test_power_hyper_publishes_the_limits() -> None:
     # the Hyper takes the limits like a SolarFlow: RAM and backup registers on the device, no flash wear like hemsEP or deviceAutomation
     async def scenario() -> None:

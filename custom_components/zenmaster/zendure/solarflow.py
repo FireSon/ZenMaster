@@ -200,7 +200,7 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
 
     def entity_write(self, entity, value):
         command = {"properties": {entity.vendor_id: value}}
-        if self.connection in [ConnectionType.CLOUD, ConnectionType.LOCAL]:
+        if self.connection == ConnectionType.LOCAL:
             self.mqtt_publish("properties/write", command)
         elif self.connection != ConnectionType.OFFLINE:
             self.device_queue.put_nowait((Command.WRITE, command))
@@ -227,7 +227,7 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
 
         if not self.new_setpoint(watts):
             return self.power_actual
-        if self.connection in [ConnectionType.CLOUD, ConnectionType.LOCAL]:
+        if self.connection == ConnectionType.LOCAL:
             self.mqtt_power(watts)
         elif self.connection != ConnectionType.OFFLINE:
             self.device_queue.put_nowait((Command.POWER, _limits(watts)))
@@ -238,7 +238,7 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
 
     def power_off(self) -> None:
         # hems overrules the settings while its flag is up: 0 W first, then the flag down on its own write
-        if self.connection in [ConnectionType.CLOUD, ConnectionType.LOCAL]:
+        if self.connection == ConnectionType.LOCAL:
             self.mqtt_power_off()
         elif self.connection != ConnectionType.OFFLINE:
             self.device_queue.put_nowait((Command.POWER, _limits(0)))
@@ -306,7 +306,7 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
                     cmd, value = Command.TIMEOUT, None
 
                 # first the state, every round, whatever the command was: the broker reports in bursts, zenSDK and BLE stream, so they get a short leash
-                if self._msg_update + (OFFLINE_TIMEOUT if self.connection in (ConnectionType.CLOUD, ConnectionType.LOCAL) else STREAM_TIMEOUT) < time.time():
+                if self._msg_update + (OFFLINE_TIMEOUT if self.connection == ConnectionType.LOCAL else STREAM_TIMEOUT) < time.time():
                     self.connection = ConnectionType.OFFLINE
                     self.power_actual = 0
                     self.set_state(DeviceState.OFFLINE)
