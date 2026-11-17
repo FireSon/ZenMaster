@@ -406,7 +406,6 @@
         "state": {
           "0": "Découvert",
           "1": "Hors ligne",
-          "2": "MQTT (cloud)",
           "3": "MQTT (local)",
           "4": "Modbus",
           "5": "HTTP",

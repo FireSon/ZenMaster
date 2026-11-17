@@ -8,7 +8,6 @@ import hashlib
 import json
 import logging
 import random
-import ssl
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -36,32 +35,6 @@ _LOGGER = logging.getLogger(__name__)
 
 SF_HAKEY = "C*dafwArEOXK"
 USER_ID = 38555  # the cloud sends this account id in its replies (captured 2026-08-24); the device seems to expect it
-BRIDGE_S = 300  # a local device's reports flow to the cloud for this long after the app last asked it something
-
-# the Zendure brokers only offer EMQX's stock RootCA: the chain is checked against it, the name not, the server cert carries none
-CLOUD_PORT = 8883
-CLOUD_TLS = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-CLOUD_TLS.check_hostname = False
-CLOUD_TLS.load_verify_locations(cadata="""-----BEGIN CERTIFICATE-----
-MIIDUTCCAjmgAwIBAgIJAPPYCjTmxdt/MA0GCSqGSIb3DQEBCwUAMD8xCzAJBgNV
-BAYTAkNOMREwDwYDVQQIDAhoYW5nemhvdTEMMAoGA1UECgwDRU1RMQ8wDQYDVQQD
-DAZSb290Q0EwHhcNMjAwNTA4MDgwNjUyWhcNMzAwNTA2MDgwNjUyWjA/MQswCQYD
-VQQGEwJDTjERMA8GA1UECAwIaGFuZ3pob3UxDDAKBgNVBAoMA0VNUTEPMA0GA1UE
-AwwGUm9vdENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzcgVLex1
-EZ9ON64EX8v+wcSjzOZpiEOsAOuSXOEN3wb8FKUxCdsGrsJYB7a5VM/Jot25Mod2
-juS3OBMg6r85k2TWjdxUoUs+HiUB/pP/ARaaW6VntpAEokpij/przWMPgJnBF3Ur
-MjtbLayH9hGmpQrI5c2vmHQ2reRZnSFbY+2b8SXZ+3lZZgz9+BaQYWdQWfaUWEHZ
-uDaNiViVO0OT8DRjCuiDp3yYDj3iLWbTA/gDL6Tf5XuHuEwcOQUrd+h0hyIphO8D
-tsrsHZ14j4AWYLk1CPA6pq1HIUvEl2rANx2lVUNv+nt64K/Mr3RnVQd9s8bK+TXQ
-KGHd2Lv/PALYuwIDAQABo1AwTjAdBgNVHQ4EFgQUGBmW+iDzxctWAWxmhgdlE8Pj
-EbQwHwYDVR0jBBgwFoAUGBmW+iDzxctWAWxmhgdlE8PjEbQwDAYDVR0TBAUwAwEB
-/zANBgkqhkiG9w0BAQsFAAOCAQEAGbhRUjpIred4cFAFJ7bbYD9hKu/yzWPWkMRa
-ErlCKHmuYsYk+5d16JQhJaFy6MGXfLgo3KV2itl0d+OWNH0U9ULXcglTxy6+njo5
-CFqdUBPwN1jxhzo9yteDMKF4+AHIxbvCAJa17qcwUKR5MKNvv09C6pvQDJLzid7y
-E2dkgSuggik3oa0427KvctFf8uhOV94RvEDyqvT5+pgNYZ2Yfga9pD/jjpoHEUlo
-88IGU8/wJCx3Ds2yc8+oBg/ynxG8f/HmCC1ET6EHHoe2jlo8FpU/SgGtghS1YL30
-IWxNsPrUP+XsZpBJy/mvOhE5QXo6Y35zDqqj8tI7AGmAWu22jg==
------END CERTIFICATE-----""")
 
 
 class Product(NamedTuple):
@@ -138,8 +111,6 @@ class ZendureDriver(Driver):
         self._mqtt_log = logging.getLogger(f"{DOMAIN}.mqtt")  # raw payload log; the file is opened on first use
         self.mqtt_log = False  # write every raw MQTT payload to zenmaster_mqtt.jsonl
         self._ble_probed: set[str] = set()  # addresses asked over Bluetooth who they are; once per run
-        self._bridges: dict[str, mqtt.Client] = {}  # per local device its own cloud client, logged in as the device
-        self._bridge_until: dict[str, float] = {}  # per device the moment its report window closes
 
         self.apptoken: str = ""
         self.cloud_url: str = ""
@@ -151,7 +122,7 @@ class ZendureDriver(Driver):
         self.wifi_psw: str = ""
 
     async def connect(self) -> None:
-        """connect to local and cloud MQTT."""
+        """connect to local MQTT and list the devices the cloud API knows."""
 
         # disconnect first
         await self.unload()
@@ -187,25 +158,21 @@ class ZendureDriver(Driver):
                 if dev_id := dev.get("deviceKey", ""):
                     self.discover(dev.get("snNumber", ""), dev.get("product", ""), dev_id, dev.get("productKey", ""), dev.get("ip", "") or "")
 
-            # setup MQTT
-            mqtt_cfg = result.get("mqtt", {})
-            if mqtt_cfg and mqtt_cfg.get("url"):
-                # the API hands out the plain port; the same broker speaks TLS on CLOUD_PORT
+            # the cloud broker address, only as a target for BLE onboarding; we do not connect to it
+            if (mqtt_cfg := result.get("mqtt", {})) and mqtt_cfg.get("url"):
                 self.cloud_url = mqtt_cfg["url"].split(":")[0]
-                self._add_mqtt_client(ConnectionType.CLOUD, self.cloud_url, CLOUD_PORT, mqtt_cfg.get("username", ""), mqtt_cfg.get("password", ""), mqtt_cfg.get("clientId"))
         except Exception as err:
             _LOGGER.warning("Cloud API failed for key %s... (%s)", self.apptoken[:10], err)
 
     async def unload(self) -> None:
         """Disconnect all MQTT clients."""
-        clients = [*self._mqtt_clients.values(), *self._bridges.values()]
+        clients = list(self._mqtt_clients.values())
         for client in clients:
             client.disconnect()
         for client in clients:
             # loop_stop joins the paho thread; off the event loop, or a paho callback blocking on run_coroutine_threadsafe deadlocks HA
             await asyncio.get_running_loop().run_in_executor(None, client.loop_stop)
         self._mqtt_clients.clear()
-        self._bridges.clear()
         ZendureBattery._registry.clear()  # class-level registry must not hand out stale instances after a reload
 
     def discover(self, sn: str, product: str, device_id: str = "", prodkey: str = "", ip: str = "", blemac: str = "") -> None:
@@ -353,9 +320,6 @@ class ZendureDriver(Driver):
             client.on_disconnect = self._on_mqtt_disconnect
             client.on_message = self._on_mqtt_message
             client.username_pw_set(username, password)
-            # the cloud broker only over TLS
-            if conn == ConnectionType.CLOUD:
-                client.tls_set_context(CLOUD_TLS)
             client.connect_async(host, port)
             client.loop_start()
             self._mqtt_clients[conn] = client
@@ -365,37 +329,13 @@ class ZendureDriver(Driver):
 
     def _on_mqtt_connect(self, client: Any, userdata: Any, _flags: Any, rc: Any, _props: Any) -> None:
         _LOGGER.info("MQTT [%s] connected, rc=%s", userdata, rc)
-        if userdata == ConnectionType.LOCAL:
-            client.subscribe("/#")  # local broker: everything, discovery needs it
+        client.subscribe("/#")  # local broker: everything, discovery needs it
         for d in list(self.devices.values()):
             # without an MQTT address there is no topic to talk to; that device is steered over zenSDK
             if not d.device_key:
                 continue
-            if userdata != ConnectionType.LOCAL:
-                client.subscribe(f"/+/{d.device_key}/#")  # the prodkey in the report topic is not always the one the API handed us
             # kick off the reporting, the same read BLE sends right after connecting
             client.publish(f"iot/{d.prodkey}/{d.device_key}/properties/read", json.dumps({"properties": ["getAll"]}))
-
-    def _bridge(self, d: ZendureDevice) -> mqtt.Client | None:
-        # The app reaches a local device through the cloud. One cloud client per device, logged in as that device, carries the
-        # app's requests to the local broker and, for BRIDGE_S after a request, the device's reports back to the cloud.
-        if (client := self._bridges.get(d.device_key)) is None and self.cloud_url and d.device_key:
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, d.device_key, userdata=d)
-            client.on_connect = lambda c, dev, *_: c.subscribe(f"iot/{dev.prodkey}/{dev.device_key}/#")
-            client.on_message = self._on_bridge_message
-            client.username_pw_set(d.device_key, hashlib.md5(d.device_key.encode()).hexdigest().upper()[8:24])
-            client.tls_set_context(CLOUD_TLS)
-            client.connect_async(self.cloud_url, CLOUD_PORT)
-            client.loop_start()
-            self._bridges[d.device_key] = client
-        return client
-
-    def _on_bridge_message(self, _client: Any, d: ZendureDevice, msg: Any) -> None:
-        # a request from the app or the cloud: hand it to the device on the local broker and open the report window
-        if not msg.payload or b'"isHA"' in msg.payload or msg.topic.endswith("time-sync") or (local := self._mqtt_clients.get(ConnectionType.LOCAL)) is None:
-            return
-        self._bridge_until[d.device_key] = time.time() + BRIDGE_S
-        local.publish(msg.topic, msg.payload)
 
     def _on_mqtt_disconnect(self, client: Any, userdata: Any, _flags: Any, rc: Any, _props: Any) -> None:
         _LOGGER.info("MQTT [%s] disconnected, rc=%s", userdata, rc)
@@ -403,8 +343,8 @@ class ZendureDriver(Driver):
     def _on_mqtt_message(self, client: Any, userdata: Any, msg: Any) -> None:
         """Paho callback on its own network thread: hop onto the HA event loop, where all downstream work must run."""
         try:
-            if not msg.payload or b'"isHA"' in msg.payload:
-                return  # empty, or our own bridged copy coming back
+            if not msg.payload:
+                return  # empty
 
             if self.mqtt_log:
                 if not self._mqtt_log.handlers:  # opened here, on the paho thread, so the event loop never blocks
@@ -433,8 +373,6 @@ class ZendureDriver(Driver):
                 # otherwise the client that brought the report sends the commands, also after a reconnect made a new one
                 if d.connection != ConnectionType.ZENSDK:
                     d.connection, d.mqtt = userdata, client
-                if userdata == ConnectionType.LOCAL and (bridge := self._bridge(d)) is not None and time.time() < self._bridge_until.get(deviceid, 0.0):
-                    bridge.publish(msg_topic, json.dumps({**payload, "isHA": True}))
 
                 match topic:
                     case "properties/report":

@@ -406,7 +406,6 @@
         "state": {
           "0": "Gefunden",
           "1": "Offline",
-          "2": "MQTT (Cloud)",
           "3": "MQTT (lokal)",
           "4": "Modbus",
           "5": "HTTP",

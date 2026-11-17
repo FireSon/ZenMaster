@@ -58,7 +58,6 @@ class Command(IntEnum):
 class ConnectionType(IntEnum):
     OFFLINE = 0
     LOCAL = 1
-    CLOUD = 2
     ZENSDK = 3
     BLE = 4
 
