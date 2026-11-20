@@ -9,7 +9,7 @@ import json
 import logging
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -19,16 +19,20 @@ from aiohttp import ClientTimeout
 from bleak import BleakClient
 from bleak_retry_connector import establish_connection
 from homeassistant.components import bluetooth, network
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 
 from ..config import ConfigField
 from ..const import DOMAIN
 from ..device import DeviceState, DistributionDevice
 from ..driver import Driver
 from ..entity import EntityDevice
+from ..update import HaUpdate
 from .battery import ZendureBattery
 from .broker import ZendureBroker, masked
 from .device import COMMAND_CHAR, READ_CHAR, ConnectionType, ZendureDevice
+from .firmware import FirmwareCatalog, manifest, versions
 from .local_api import API_PATH, ZendureApiView
 from .smartmeter import ZendureSmartMeter
 from .solarflow import ZendureHub, ZendureHyper, ZendureLegacy, ZendureSolarFlow
@@ -99,6 +103,9 @@ class ZendureDriver(Driver):
         ConfigField("mqtt_log", {"boolean": {}}, cast=bool, section_key="local_broker"),
         ConfigField("wifi_ssid", {"text": {}}, cast=str, required=False, section_key="wifi"),
         ConfigField("wifi_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="wifi"),
+        ConfigField("account", {"text": {}}, cast=str, required=False, section_key="account"),
+        ConfigField("account_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="account"),
+        ConfigField("account_env", {"select": {"options": ["app", "pre"]}}, cast=str, required=False, expert=True, section_key="account"),
     ]
     ADD = [  # a device that is never found: its identity by hand, the addresses it is reached on
         ConfigField("sn", {"text": {}}, cast=str),
@@ -114,6 +121,8 @@ class ZendureDriver(Driver):
         self.mqtt_log = False  # write every raw MQTT payload to zenmaster_mqtt.jsonl
         self._ble_probed: set[str] = set()  # addresses asked over Bluetooth who they are; once per run
         self.broker = ZendureBroker(self)  # the own broker, used when no other broker is configured
+        self.catalog = FirmwareCatalog(self)
+        self._catalog_unsub: Any = None
 
         self.apptoken: str = ""
         self.cloud_url: str = ""
@@ -123,6 +132,9 @@ class ZendureDriver(Driver):
         self.mqtt_psw: str = ""
         self.wifi_ssid: str = ""
         self.wifi_psw: str = ""
+        self.account = ""  # the Zendure app login, only for the firmware catalog
+        self.account_psw = ""
+        self.account_env = "app"  # app = production, pre = the test environment with the betas
         self.local_ip = "127.0.0.1"  # HA's own LAN address: the devices reach the API and the own broker there
         self.api_url = ""  # the API address a device gets at registration
         self.broker_host = ""  # the broker a device is sent to: the configured one, else HA itself
@@ -159,6 +171,11 @@ class ZendureDriver(Driver):
             self._add_mqtt_client(ConnectionType.LOCAL, self.mqtt_host, self.mqtt_port, self.mqtt_user, self.mqtt_psw)
         else:
             await self.broker.start(self.local_ip)
+
+        # the firmware catalog of the account: once now, then weekly
+        if self.account and self.account_psw:
+            self.hass.async_create_task(self._firmware_check())
+            self._catalog_unsub = async_track_time_interval(self.hass, lambda _now: self.hass.async_create_task(self._firmware_check()), timedelta(days=7))
 
         if not self.apptoken:
             return
@@ -203,6 +220,9 @@ class ZendureDriver(Driver):
             await asyncio.get_running_loop().run_in_executor(None, client.loop_stop)
         self._mqtt_clients.clear()
         self.broker.close()
+        if self._catalog_unsub is not None:
+            self._catalog_unsub()
+            self._catalog_unsub = None
         ZendureBattery._registry.clear()  # class-level registry must not hand out stale instances after a reload
 
     def discover(self, sn: str, product: str, device_id: str = "", prodkey: str = "", ip: str = "", blemac: str = "") -> None:
@@ -425,6 +445,15 @@ class ZendureDriver(Driver):
 
                     case "firmware/report":
                         d.firmware_report(payload)
+                        self._firmware_show(d)
+
+                    case "firmware/download/progress" | "firmware/upgrade/progress":
+                        # the download and then the install, each 0 to 100; a failure or the end clears the pending update
+                        busy = bool(payload.get("success", True)) and not payload.get("complete")
+                        if not busy:
+                            _LOGGER.info("Zendure firmware %s on %s: %s", topic, d.name, {k: payload.get(k) for k in ("module", "success", "complete", "errorReason")})
+                            d.ota = None
+                        self._firmware_show(d, payload.get("progress") if busy else None, busy)
 
                     case "function/invoke/reply":
                         if isinstance(d, ZendureSolarFlow) and payload.get("messageId") == d._msg_id:
@@ -448,6 +477,33 @@ class ZendureDriver(Driver):
                         known.config_changed()
         except Exception as ex:
             _LOGGER.warning("MQTT message %s: %s", msg_topic, ex)
+
+    async def _firmware_check(self) -> None:
+        try:
+            await self.catalog.refresh()
+        except Exception as err:
+            _LOGGER.warning("Zendure firmware catalog: %s", err)
+            return
+        for d in self.devices.values():
+            self._firmware_show(d)
+
+    def _firmware_show(self, d: Any, progress: int | None = None, busy: bool = False) -> None:
+        # a device the account lists gets an update entity: zenSDK running versus zenSDK on offer
+        if not hasattr(d, "mqtt_publish") or (entry := self.catalog.entries.get(d.sn)) is None:
+            return
+        if getattr(d, "firmware", None) is None:
+            d.firmware = HaUpdate(d, "firmware", self._firmware_install)
+        d.firmware.show(*versions(entry, d.esp_version), progress, busy)
+
+    async def _firmware_install(self, entity: HaUpdate) -> None:
+        # the files to the HA storage, the list to the local API, then the device is told to fetch it
+        d = entity.device
+        if (entry := self.catalog.entries.get(d.sn)) is None or d.mqtt is None:
+            raise HomeAssistantError(f"{d.name}: no firmware on offer, or not on the broker")
+        await self.catalog.fetch(entry)
+        d.ota = manifest(entry, self.api_url)
+        d.mqtt_publish("firmware/download", {})
+        self._firmware_show(d, None, True)
 
     def _register_reply(self, client: Any, userdata: Any, msg_topic: str, payload: dict) -> None:
         # zenSDK 3 rejects a reply without params; both versions store the API address from it and leave the cloud API

@@ -84,6 +84,7 @@ class ZendureDevice:
         self.modules: dict[str, int] = {}  # firmware version per module, from the device's own firmware report
         self.esp_version = 0  # the zenSDK version (ESP32 module); 0 = zenSDK 2, which does not report it
         self.ota: dict | None = None  # the pending firmware update, the list the device fetches from the API
+        self.firmware: Any = None  # the HA update entity, once the account lists the device
         self._ble_client: BleakClient | None = None
         # the device's BLESPP greeting, which a connect waits for
         self._ble_spp = asyncio.Event()

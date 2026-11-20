@@ -536,6 +536,11 @@
       "arm": {
         "name": "Bereitstellen"
       }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
     }
   },
   "config_panel": {
@@ -723,6 +728,18 @@
       "duration_entity": {
         "name": "Programmdauer",
         "description": "Optional: die eigene Schätzung des Geräts für die Dauer des gewählten Programms. Der gelernte Zyklus wird darauf gestreckt oder gekürzt; ohne Wert gilt der gelernte Zyklus."
+      },
+      "account": {
+        "name": "Zendure-Konto",
+        "description": "E-Mail der Zendure-App, nur für die Firmwareliste"
+      },
+      "account_psw": {
+        "name": "Passwort",
+        "description": "Passwort der Zendure-App; wird in Home Assistant gespeichert"
+      },
+      "account_env": {
+        "name": "Firmwarekanal",
+        "description": "Produktion oder der Testkanal mit den Betas"
       }
     },
     "section": {
@@ -733,7 +750,8 @@
       "expert": "Experte",
       "cloud": "Cloud",
       "local_broker": "Lokaler Broker",
-      "wifi": "WLAN"
+      "wifi": "WLAN",
+      "account": "Konto"
     },
     "action": {
       "arm_off": "Nicht scharfschalten",
@@ -778,6 +796,10 @@
         "pause": "Pause/Fortsetzen",
         "remote": "Fernstart",
         "automation": "Automatisierung"
+      },
+      "account_env": {
+        "app": "Produktion",
+        "pre": "Test (Beta)"
       }
     },
     "ui": {

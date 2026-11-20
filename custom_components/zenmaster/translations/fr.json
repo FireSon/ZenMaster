@@ -536,6 +536,11 @@
       "arm": {
         "name": "Préparer"
       }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
     }
   },
   "config_panel": {
@@ -723,6 +728,18 @@
       "duration_entity": {
         "name": "Durée du programme",
         "description": "Facultatif : l'estimation par l'appareil de la durée du programme choisi. Le cycle appris est étiré ou raccourci à cette durée ; sans valeur, le cycle appris s'applique."
+      },
+      "account": {
+        "name": "Compte Zendure",
+        "description": "E-mail de l'app Zendure, uniquement pour la liste des firmwares"
+      },
+      "account_psw": {
+        "name": "Mot de passe",
+        "description": "Mot de passe de l'app Zendure ; enregistré dans Home Assistant"
+      },
+      "account_env": {
+        "name": "Canal firmware",
+        "description": "Production ou le canal de test avec les bêtas"
       }
     },
     "section": {
@@ -733,7 +750,8 @@
       "expert": "Expert",
       "cloud": "Cloud",
       "local_broker": "Broker local",
-      "wifi": "Wi-Fi"
+      "wifi": "Wi-Fi",
+      "account": "Compte"
     },
     "action": {
       "arm_off": "Ne pas armer",
@@ -778,6 +796,10 @@
         "pause": "Pause/reprise",
         "remote": "Démarrage à distance",
         "automation": "Automatisation"
+      },
+      "account_env": {
+        "app": "Production",
+        "pre": "Test (bêta)"
       }
     },
     "ui": {

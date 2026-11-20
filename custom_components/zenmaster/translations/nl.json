@@ -536,6 +536,11 @@
       "arm": {
         "name": "Klaarzetten"
       }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
     }
   },
   "config_panel": {
@@ -723,6 +728,18 @@
       "duration_entity": {
         "name": "Programmaduur",
         "description": "Optioneel: de eigen schatting van het apparaat van de lengte van het gekozen programma. De geleerde cyclus wordt daarnaar uitgerekt of ingekort; zonder waarde geldt de geleerde cyclus."
+      },
+      "account": {
+        "name": "Zendure-account",
+        "description": "E-mail van de Zendure-app, alleen voor de firmwarelijst"
+      },
+      "account_psw": {
+        "name": "Wachtwoord",
+        "description": "Wachtwoord van de Zendure-app; staat opgeslagen in Home Assistant"
+      },
+      "account_env": {
+        "name": "Firmwarekanaal",
+        "description": "Productie of het testkanaal met de bèta's"
       }
     },
     "section": {
@@ -733,7 +750,8 @@
       "expert": "Expert",
       "cloud": "Cloud",
       "local_broker": "Lokale broker",
-      "wifi": "Wifi"
+      "wifi": "Wifi",
+      "account": "Account"
     },
     "action": {
       "arm_off": "Niet armen",
@@ -778,6 +796,10 @@
         "pause": "Pauze/hervat",
         "remote": "Starten op afstand",
         "automation": "Automation"
+      },
+      "account_env": {
+        "app": "Productie",
+        "pre": "Test (bèta)"
       }
     },
     "ui": {
