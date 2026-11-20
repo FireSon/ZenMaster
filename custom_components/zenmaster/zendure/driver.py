@@ -18,7 +18,7 @@ import paho.mqtt.client as mqtt
 from aiohttp import ClientTimeout
 from bleak import BleakClient
 from bleak_retry_connector import establish_connection
-from homeassistant.components import bluetooth
+from homeassistant.components import bluetooth, network
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from ..config import ConfigField
@@ -28,6 +28,7 @@ from ..driver import Driver
 from ..entity import EntityDevice
 from .battery import ZendureBattery
 from .device import COMMAND_CHAR, READ_CHAR, ConnectionType, ZendureDevice
+from .local_api import API_PATH, ZendureApiView
 from .smartmeter import ZendureSmartMeter
 from .solarflow import ZendureHub, ZendureHyper, ZendureLegacy, ZendureSolarFlow
 
@@ -120,12 +121,36 @@ class ZendureDriver(Driver):
         self.mqtt_psw: str = ""
         self.wifi_ssid: str = ""
         self.wifi_psw: str = ""
+        self.local_ip = "127.0.0.1"  # HA's own LAN address: the devices reach the API and the own broker there
+        self.api_url = ""  # the API address a device gets at registration
+        self.broker_host = ""  # the broker a device is sent to: the configured one, else HA itself
+        self.firmware_dir = hass.config.path(f"{DOMAIN}_firmware") if hasattr(getattr(hass, "config", None), "path") else ""
+
+    async def _lan_address(self) -> tuple[str, int]:
+        # HA's address and HTTP port as HA knows them; before http is up, the source address of the host
+        api = getattr(getattr(self.hass, "config", None), "api", None)
+        if (ip := getattr(api, "local_ip", None)) is None:
+            try:
+                ip = await network.async_get_source_ip(self.hass)
+            except Exception:  # no network component (tests)
+                ip = "127.0.0.1"
+        return str(ip), getattr(api, "port", None) or 8123
 
     async def connect(self) -> None:
         """connect to local MQTT and list the devices the cloud API knows."""
 
         # disconnect first
         await self.unload()
+
+        # the addresses the devices get: the API at registration, the broker in the platform config and at pairing
+        self.local_ip, port = await self._lan_address()
+        self.api_url = f"http://{self.local_ip}:{port}{API_PATH}"
+        self.broker_host = self.mqtt_host or self.local_ip
+
+        # the API view is registered once per HA run; it finds the driver of the running coordinator itself
+        if (data := getattr(self.hass, "data", None)) is not None and hasattr(self.hass, "http") and not data.get(f"{DOMAIN}_zendure_api"):
+            data[f"{DOMAIN}_zendure_api"] = True
+            self.hass.http.register_view(ZendureApiView(self.hass))
 
         # connect to local MQTT
         if self.mqtt_host != "":
@@ -368,6 +393,10 @@ class ZendureDriver(Driver):
     def _on_device_message(self, client: Any, userdata: Any, msg_topic: str, prodkey: str, deviceid: str, topic: str, payload: dict) -> None:
         """A broker message on the event loop: the device it belongs to handles it, an unknown one is discovered."""
         try:
+            # a registration is answered for every device, also one not known yet: the API address rides along
+            if topic == "register":
+                self._register_reply(client, userdata, msg_topic, payload)
+                payload = {"deviceSn": (payload.get("params") or {}).get("deviceSn")}  # its serial, for the discovery below
             if (d := next((d for d in self.devices.values() if d.device_key == deviceid), None)) is not None:
                 # a device on zenSDK stays there: the broker still brings its reports, the commands go over HTTP;
                 # otherwise the client that brought the report sends the commands, also after a reconnect made a new one
@@ -378,11 +407,8 @@ class ZendureDriver(Driver):
                     case "properties/report":
                         d.update_properties(payload, time.time())
 
-                    case "register":
-                        _LOGGER.info("Register for %s => %s", d.device_id, payload)
-                        if userdata == ConnectionType.LOCAL:
-                            reply = json.dumps({"token": payload.get("params", {}).get("token"), "result": 0})  # flat, exactly like the proven Brandthus reply
-                            client.publish(f"iot{msg_topic}/replay", reply)  # no retain: a retained replay reboot-loops the device
+                    case "firmware/report":
+                        d.firmware_report(payload)
 
                     case "function/invoke/reply":
                         if isinstance(d, ZendureSolarFlow) and payload.get("messageId") == d._msg_id:
@@ -404,3 +430,12 @@ class ZendureDriver(Driver):
                         known.config_changed()
         except Exception as ex:
             _LOGGER.warning("MQTT message %s: %s", msg_topic, ex)
+
+    def _register_reply(self, client: Any, userdata: Any, msg_topic: str, payload: dict) -> None:
+        # zenSDK 3 rejects a reply without params; both versions store the API address from it and leave the cloud API
+        _LOGGER.info("Register on %s", msg_topic)
+        if userdata != ConnectionType.LOCAL:
+            return
+        token = (payload.get("params") or {}).get("token")
+        reply = {"token": token, "result": 0, "params": {"result": 0, "token": token, "apiUrl": self.api_url, "userId": USER_ID}}
+        client.publish(f"iot{msg_topic}/replay", json.dumps(reply))  # no retain: a retained replay reboot-loops the device

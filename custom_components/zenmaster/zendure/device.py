@@ -81,6 +81,9 @@ class ZendureDevice:
         else:
             self.ble_name = None
         self._msg_id: int = 100000
+        self.modules: dict[str, int] = {}  # firmware version per module, from the device's own firmware report
+        self.esp_version = 0  # the zenSDK version (ESP32 module); 0 = zenSDK 2, which does not report it
+        self.ota: dict | None = None  # the pending firmware update, the list the device fetches from the API
         self._ble_client: BleakClient | None = None
         # the device's BLESPP greeting, which a connect waits for
         self._ble_spp = asyncio.Event()
@@ -90,6 +93,11 @@ class ZendureDevice:
 
     def subentry_data(self) -> dict[str, Any]:
         return {"product": self.model, "sn": self.sn, "device_id": self.device_key, "prodkey": self.prodkey, "ip": self.ip or "", "blemac": self.blemac}
+
+    def firmware_report(self, payload: dict) -> None:
+        # the module versions the device runs; only zenSDK 3 lists its own ESP32 module
+        self.modules = {str(m["module"]): int(m["version"]) for m in payload.get("modules") or [] if isinstance(m, dict) and "module" in m and "version" in m}
+        self.esp_version = self.modules.get("ESP32", 0)
 
     def _ble_close(self) -> None:
         # the BLE link closed and forgotten, so the device's connection slot is free for the next attempt or another client
