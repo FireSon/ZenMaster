@@ -315,13 +315,31 @@ Instellingen van de Zendure-driver (besloten 2026-11-20), nu `zendure/driver.py:
 Alleen met unittests getest (327 geslaagd); niets op een device of op de productie-HA. Afwijkingen en
 open punten:
 
-- **Client-id (besluit 3b.3) niet als controle gebouwd.** Welke client-id de firmware stuurt, is niet
-  vastgesteld (in de decompile een pointer, geen naam). De broker controleert in plaats daarvan het
+- **Client-id (besluit 3b.3) niet als controle gebouwd.** Bij het bouwen was niet vastgesteld welke
+  client-id de firmware stuurt (in de decompile een pointer, geen naam); de livetest hieronder laat zien dat
+  het de `deviceId` is. De broker controleert in plaats daarvan het
   `deviceId` in elk topic: een verbinding mag alleen berichten sturen voor de device-id's waarvoor ze is
   toegelaten (bekend ip, koppelvenster of HTTP-controle); de rest wordt gelogd en weggegooid. De
   client-id wordt bij elke verbinding gelogd, zodat dit bij de eerste devicetest vast te stellen is.
-- **TLS-suite per firmware (besluit 3b.2) nog niet bevestigd.** De broker logt de gekozen suite bij elke
-  verbinding.
+- **TLS-suite per firmware (besluit 3b.2):** zenSDK 3.0.21 kiest ECDHE-RSA-AES128-GCM-SHA256 (livetest
+  hieronder). zenSDK 2 nog niet bevestigd.
+
+**Livetest 20 november, 12:26 tot 12:31:** de broker van deze branch (echte driver en broker, nep-HA, geen
+device-loop en dus geen setpoints) op deze pc (192.168.1.99), SF2400_37 erheen gezet met `Mqtt.SetConfig`
+en daarna terug naar 192.168.1.250 (op de HA-host gecontroleerd: verbinding weer open op 8883).
+
+- Verbinding binnen 18 s na `SetConfig`, toegelaten op bekend ip, TLS 1.2 met ECDHE-RSA-AES128-GCM-SHA256.
+- **Client-id = de `deviceId`** (`MPEt6K1P`). De controle uit besluit 3b.3 kan dus alsnog gebouwd worden.
+- In 4,7 minuten 105 rapporten, 3 firmwarerapporten, 3 `log`-berichten (ongeveer elke 78 s), 4
+  `event/error` (eventId 3); geen verbroken verbinding, niets weggegooid.
+- `time-sync` beantwoord en `enable_log: false` meegestuurd; het firmwarerapport zette de versie op 3.0.21.
+- De broker stuurde `properties/read` twee keer: het device stuurt twee SUBSCRIBE-pakketten.
+- Niet getest: registratie, API-adres en `hemsId`. `Mqtt.SetConfig` leidt niet tot een `register`, en het
+  device roept de API aan op zijn oude adres (het gestopte testeindpunt); op deze pc kwam geen API-aanroep
+  binnen. Daarvoor is opnieuw koppelen via Bluetooth nodig.
+- De foutmelding `'NoneType' object is not callable` bij rapporten met accu's kwam uit het harnas
+  (`on_invalidate` zet de coordinator in HA), niet uit de branch.
+- Harnas: `...\scratchpad\live\broker_live.py`, log `broker_live.log`.
 - **Voortgang van een firmware-update** komt uit de decompile van 2.0.59 (`firmware/download/progress`,
   `firmware/upgrade/progress`, velden `progress`, `success`, `complete`); niet live gezien.
 - **De update-entiteit vergelijkt alleen zenSDK (ESP32).** Andere modules (AC, MASTER, BMS) staan in de
