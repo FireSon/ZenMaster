@@ -27,6 +27,7 @@ from ..device import DeviceState, DistributionDevice
 from ..driver import Driver
 from ..entity import EntityDevice
 from .battery import ZendureBattery
+from .broker import ZendureBroker, masked
 from .device import COMMAND_CHAR, READ_CHAR, ConnectionType, ZendureDevice
 from .local_api import API_PATH, ZendureApiView
 from .smartmeter import ZendureSmartMeter
@@ -112,6 +113,7 @@ class ZendureDriver(Driver):
         self._mqtt_log = logging.getLogger(f"{DOMAIN}.mqtt")  # raw payload log; the file is opened on first use
         self.mqtt_log = False  # write every raw MQTT payload to zenmaster_mqtt.jsonl
         self._ble_probed: set[str] = set()  # addresses asked over Bluetooth who they are; once per run
+        self.broker = ZendureBroker(self)  # the own broker, used when no other broker is configured
 
         self.apptoken: str = ""
         self.cloud_url: str = ""
@@ -152,9 +154,11 @@ class ZendureDriver(Driver):
             data[f"{DOMAIN}_zendure_api"] = True
             self.hass.http.register_view(ZendureApiView(self.hass))
 
-        # connect to local MQTT
+        # a configured broker is used as before; without one, ZenMaster is the broker on its own LAN address
         if self.mqtt_host != "":
             self._add_mqtt_client(ConnectionType.LOCAL, self.mqtt_host, self.mqtt_port, self.mqtt_user, self.mqtt_psw)
+        else:
+            await self.broker.start(self.local_ip)
 
         if not self.apptoken:
             return
@@ -198,6 +202,7 @@ class ZendureDriver(Driver):
             # loop_stop joins the paho thread; off the event loop, or a paho callback blocking on run_coroutine_threadsafe deadlocks HA
             await asyncio.get_running_loop().run_in_executor(None, client.loop_stop)
         self._mqtt_clients.clear()
+        self.broker.close()
         ZendureBattery._registry.clear()  # class-level registry must not hand out stale instances after a reload
 
     def discover(self, sn: str, product: str, device_id: str = "", prodkey: str = "", ip: str = "", blemac: str = "") -> None:
@@ -372,13 +377,7 @@ class ZendureDriver(Driver):
                 return  # empty
 
             if self.mqtt_log:
-                if not self._mqtt_log.handlers:  # opened here, on the paho thread, so the event loop never blocks
-                    handler = RotatingFileHandler(self.hass.config.path(f"{DOMAIN}_mqtt.jsonl"), maxBytes=20_000_000, backupCount=3)
-                    handler.setFormatter(logging.Formatter("%(message)s"))
-                    self._mqtt_log.addHandler(handler)
-                    self._mqtt_log.setLevel(logging.INFO)
-                    self._mqtt_log.propagate = False
-                self._mqtt_log.info(json.dumps({"t": time.time(), "topic": msg.topic, "payload": msg.payload.decode("utf-8", "ignore")}))
+                self.log_raw(msg.topic, masked(msg.payload.decode("utf-8", "ignore")))
 
             _, prodkey, deviceid, topic = msg.topic.split("/", 3)
             payload = json.loads(msg.payload.decode("utf-8", "ignore"))
@@ -389,6 +388,16 @@ class ZendureDriver(Driver):
             pass  # loop closed during shutdown, drop the message
         except Exception as ex:
             _LOGGER.warning("MQTT message %s: %s", msg.topic, ex)
+
+    def log_raw(self, topic: str, payload: str) -> None:
+        # one raw payload in zenmaster_mqtt.jsonl; called off the event loop (paho thread or executor), so the file never blocks it
+        if not self._mqtt_log.handlers:
+            handler = RotatingFileHandler(self.hass.config.path(f"{DOMAIN}_mqtt.jsonl"), maxBytes=20_000_000, backupCount=3)
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self._mqtt_log.addHandler(handler)
+            self._mqtt_log.setLevel(logging.INFO)
+            self._mqtt_log.propagate = False
+        self._mqtt_log.info(json.dumps({"t": time.time(), "topic": topic, "payload": payload}))
 
     def _on_device_message(self, client: Any, userdata: Any, msg_topic: str, prodkey: str, deviceid: str, topic: str, payload: dict) -> None:
         """A broker message on the event loop: the device it belongs to handles it, an unknown one is discovered."""
