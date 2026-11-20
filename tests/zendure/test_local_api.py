@@ -90,3 +90,39 @@ def test_ota_list_and_files_only_for_the_pending_device(tmp_path) -> None:
     assert firmware_file(driver, "192.168.1.24", "other.bin") is None
     assert firmware_file(driver, "192.168.1.24", "../secrets.bin") is None
     assert firmware_file(driver, "192.168.1.99", "fw.bin") is None
+
+
+def make_solarflow(driver: ZendureDriver):
+    # a real SolarFlow on the driver, fed over the broker path
+    from custom_components.zenmaster.zendure.solarflow import ZendureSolarFlow
+
+    device = ZendureSolarFlow(driver.hass, None, None, "SF1600_62", {"prodkey": "65174u", "device_id": "Cd3wbW9V", "sn": "HED4NENBN470562"}, "solarFlow1600AC+", 1600, -1600)
+    device.driver = driver
+    for e in device.entities.values():
+        e.hass = None
+    driver.devices[device.sn] = device
+    return device
+
+
+async def test_energy_report_time_sync_and_firmware_report() -> None:
+    import asyncio
+
+    driver = make_driver()
+    driver.hass.loop = asyncio.get_running_loop()
+    device = make_solarflow(driver)
+    client = Client()
+    try:
+        # the 1.5 s energy report sets the two powers
+        driver._on_device_message(client, ConnectionType.LOCAL, "/65174u/Cd3wbW9V/properties/energy", "65174u", "Cd3wbW9V", "properties/energy", {"properties": {"chargePower": 0, "outputPower": 300, "minSoc": 100}})
+        assert device.home_output == 300 and device.power_actual == 300 and device.mqtt is client
+
+        # the time request is answered, and the log upload is switched off with it
+        driver._on_device_message(client, ConnectionType.LOCAL, "/65174u/Cd3wbW9V/time-sync", "65174u", "Cd3wbW9V", "time-sync", {"messageId": 1})
+        assert [t for t, _ in client.sent] == ["iot/65174u/Cd3wbW9V/time-sync/reply", "iot/65174u/Cd3wbW9V/dev/debug"]
+        assert client.sent[1][1] == {"enable_log": False}
+
+        # the firmware report tells zenSDK 2 from 3
+        driver._on_device_message(client, ConnectionType.LOCAL, "/65174u/Cd3wbW9V/firmware/report", "65174u", "Cd3wbW9V", "firmware/report", {"modules": [{"module": "MASTER", "version": 4107}, {"module": "ESP32", "version": 12309}]})
+        assert device.esp_version == 12309 and device.modules["MASTER"] == 4107
+    finally:
+        device.unload()

@@ -204,6 +204,9 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
             self.mqtt_publish("properties/write", command)
         elif self.connection != ConnectionType.OFFLINE:
             self.device_queue.put_nowait((Command.WRITE, command))
+        # HEMS keeps its own copy of the SoC limits: zenSDK 3 fetches them again from the API shortly after the write
+        if entity.vendor_id in ("minSoc", "socSet") and self.esp_version >= 0x3000 and hasattr(self.hass.loop, "call_later"):
+            self.hass.loop.call_later(2, self.mqtt_publish, "function/invoke", {"function": "fetchHems", "arguments": {}})
 
     def power(self, watts: int, mode: DistributionMode) -> int:
         # an offline device is not steered: nothing is sent, the setpoint stays as it was

@@ -399,13 +399,20 @@ class ZendureDriver(Driver):
                 payload = {"deviceSn": (payload.get("params") or {}).get("deviceSn")}  # its serial, for the discovery below
             if (d := next((d for d in self.devices.values() if d.device_key == deviceid), None)) is not None:
                 # a device on zenSDK stays there: the broker still brings its reports, the commands go over HTTP;
-                # otherwise the client that brought the report sends the commands, also after a reconnect made a new one
+                # otherwise the client that brought the report sends the commands, also after a reconnect made a new one.
+                # The client is kept either way: the broker messages (dev/debug, fetchHems, firmware) use it
+                d.mqtt = client
                 if d.connection != ConnectionType.ZENSDK:
-                    d.connection, d.mqtt = userdata, client
+                    d.connection = userdata
 
                 match topic:
                     case "properties/report":
                         d.update_properties(payload, time.time())
+
+                    case "properties/energy":
+                        # the 1.5 s report of a device with a hemsId: its two powers under the names of the full report
+                        p = payload.get("properties") or {}
+                        d.update_properties({"properties": {k: p[s] for s, k in (("chargePower", "gridInputPower"), ("outputPower", "outputHomePower")) if s in p}}, time.time())
 
                     case "firmware/report":
                         d.firmware_report(payload)
@@ -419,6 +426,8 @@ class ZendureDriver(Driver):
                         z = datetime.now().astimezone().strftime("%z")
                         reply = json.dumps({"zoneOffset": f"{z[:3]}:{z[3:]}", "timestamp": int(time.time()), "userId": USER_ID, "messageId": payload.get("messageId", "none")})
                         client.publish(f"iot{msg_topic}/reply", reply)
+                        # a device asks the time at every connect and after each restart: the log upload to the cloud goes off again
+                        client.publish(f"iot/{prodkey}/{deviceid}/dev/debug", json.dumps({"enable_log": False}))
             else:
                 if sn := payload.get("log", {}).get("sn") or payload.get("slaveSN") or payload.get("properties", {}).get("slaveSn") or payload.get("deviceSn"):
                     if (known := self.devices.get(sn)) is None:
