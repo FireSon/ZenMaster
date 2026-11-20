@@ -301,6 +301,19 @@ async def ws_price_auth(hass, connection, msg):
     connection.send_result(msg["id"], {"ok": coord.prices.needcode, "patch": {"needcode": coord.prices.needcode}})
 
 
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/zendure_pair", vol.Required("device_id"): str})
+@websocket_api.require_admin
+@callback
+def ws_zendure_pair(hass, connection, msg):
+    # the pairing screen read the device id over Bluetooth: the own broker lets that device in from an unknown address for 10 minutes
+    coord = _coordinator(hass)
+    if coord is None or (driver := coord.drivers.get("zendure")) is None:
+        connection.send_error(msg["id"], "not_found", "zendure")
+        return
+    driver.broker.pair(msg["device_id"])
+    connection.send_result(msg["id"], {"ok": True})
+
+
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_history"})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -448,5 +461,5 @@ def async_register_ws(hass: HomeAssistant) -> None:
     if hass.data.get(f"{DOMAIN}_ws"):
         return
     hass.data[f"{DOMAIN}_ws"] = True
-    for handler in (ws_get_schema, ws_get_plan, ws_get_history, ws_get_day, ws_price_auth, ws_consumer_action, ws_save_schema, ws_subentry_add, ws_subentry_update, ws_subentry_delete, ws_subscribe_plan):
+    for handler in (ws_get_schema, ws_get_plan, ws_get_history, ws_get_day, ws_price_auth, ws_consumer_action, ws_save_schema, ws_subentry_add, ws_subentry_update, ws_subentry_delete, ws_subscribe_plan, ws_zendure_pair):
         websocket_api.async_register_command(hass, handler)

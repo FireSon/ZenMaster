@@ -740,6 +740,10 @@
       "account_env": {
         "name": "Kanał firmware",
         "description": "Produkcja lub kanał testowy z wersjami beta"
+      },
+      "broker_host": {
+        "name": "Broker",
+        "description": "Dokąd raportują urządzenia: sam Home Assistant lub broker w sekcji Ekspert"
       }
     },
     "section": {
@@ -748,9 +752,6 @@
       "behaviour": "Zachowanie",
       "plate": "Tabliczka znamionowa",
       "expert": "Ekspert",
-      "cloud": "Chmura",
-      "local_broker": "Lokalny broker",
-      "wifi": "Wi-Fi",
       "account": "Konto"
     },
     "action": {
@@ -823,11 +824,9 @@
       },
       "ble": {
         "busy": "Trwa…",
-        "cloud": "Chmura",
         "connect": "Połącz",
         "empty": "(puste)",
-        "local": "Lokalnie",
-        "log_broker": "Broker ({mode}): {url}",
+        "log_broker": "Broker: {url}",
         "log_connected": "Połączono: {name}",
         "log_connecting": "Łączenie… (wybierz urządzenie w przeglądarce)",
         "log_done": "Gotowe: urządzenie pojawi się, gdy tylko zgłosi się do brokera.",
@@ -838,12 +837,13 @@
         "log_station": "Wysyłanie polecenia station…",
         "log_wait": "Czekam na ponowne połączenie… ({error})",
         "no_info": "nie otrzymano informacji o urządzeniu",
-        "no_url": "(niedostępne, synchronizacja z chmurą jeszcze się nie odbyła)",
+        "no_url": "(nieznany)",
         "title": "Parowanie urządzenia przez Bluetooth",
         "unavailable": "Web Bluetooth nie jest tu dostępny. Wymaga HTTPS (lub localhost) i Chrome/Edge.",
         "log_device": "Urządzenie: {id}",
         "broker": "Broker",
-        "wifi_psw": "Hasło Wi-Fi"
+        "wifi_psw": "Hasło Wi-Fi",
+        "wifi_ssid": "Sieć Wi-Fi"
       },
       "chart": {
         "battery": "Bateria",

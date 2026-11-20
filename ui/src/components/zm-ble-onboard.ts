@@ -4,14 +4,14 @@ import { tokens } from '../tokens.js';
 import { ZendureBle } from '../service/ble.js';
 import { byKind } from '../service/drivers.js';
 import { t } from '../service/i18n.js';
+import { api } from '../service/api.js';
 
 // BLE onboarding: provisions a Zendure (WiFi + MQTT broker) over Web Bluetooth, then registers it.
-// MQTT/WiFi come from the driver config; the user only picks local vs cloud broker.
+// The broker is ZenMaster's own (or the configured one); the network name and password are typed here and not stored in HA.
 export class ZmBleOnboard extends LitElement {
   @property({ attribute: false }) config: any = null;
   @property() bleName = '';
   @property() driverId = '';
-  @state() private _mode: 'local' | 'global' = 'local';
   @state() private _log: string[] = [];
   @state() private _busy = false;
   @state() private _done = false;
@@ -22,10 +22,9 @@ export class ZmBleOnboard extends LitElement {
     const drivers = byKind(this.config, 'ZendureDriver');
     return drivers[this.driverId] ?? Object.values(drivers)[0] ?? {};
   }
-  private get _iotUrl(): string {
-    return this._mode === 'local' ? (this._driver.mqtt_host ?? '') : (this._driver.cloud_url ?? '');
-  }
-  private get _ssid(): string { return this._driver.wifi_ssid ?? ''; }
+  private get _iotUrl(): string { return this._driver.broker_host ?? ''; }
+  // the browser remembers the network name, never the password
+  @state() private _ssid = (() => { try { return localStorage.getItem('zm-ble-ssid') ?? ''; } catch { return ''; } })();
   @state() private _pwd = '';
 
   static styles = [
@@ -39,10 +38,6 @@ export class ZmBleOnboard extends LitElement {
       .x { flex: none; border: none; background: var(--zm-card-2); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; color: var(--zm-text-dim); display: flex; align-items: center; justify-content: center; }
       .row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
       .row label { font-family: var(--zm-font-body); font-size: var(--zm-fs-s); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--zm-text-faint); }
-      .seg { display: flex; gap: 8px; }
-      .seg button { flex: 1 1 0; border: 1px solid var(--zm-border); background: var(--zm-card-2); color: var(--zm-text-dim); border-radius: 8px; padding: 9px; font-family: var(--zm-font-body); font-weight: 700; font-size: var(--zm-fs-m); cursor: pointer; }
-      .seg button.on { background: var(--zm-primary); color: #fff; border-color: var(--zm-primary); }
-      .seg button:disabled { opacity: 0.5; cursor: default; }
       .hint { font-family: var(--zm-font-body); font-size: var(--zm-fs-m); color: var(--zm-text-dim); margin: 4px 0 12px; word-break: break-all; }
       input.zin { width: 100%; background: var(--zm-card); color: var(--zm-text); border: 1px solid var(--zm-border); border-radius: 7px; font-family: var(--zm-font-body); font-weight: 700; font-size: var(--zm-fs-m); padding: 4px 9px; text-align: right; box-sizing: border-box; }
       .btn { width: 100%; border: none; border-radius: 11px; background: var(--zm-primary); color: #fff; font-family: var(--zm-font-display); font-weight: 600; font-size: var(--zm-fs-m); padding: 11px; cursor: pointer; box-shadow: 0 2px 8px var(--zm-primary-soft); }
@@ -61,19 +56,22 @@ export class ZmBleOnboard extends LitElement {
   private async _start() {
     this._busy = true; this._log = []; this._done = false;
     const iotUrl = this._iotUrl, ssid = this._ssid, pwd = this._pwd;
+    try { localStorage.setItem('zm-ble-ssid', ssid); } catch { /* private window */ }
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     const token = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    let deviceId = '', deviceSn = '';
+    let deviceId = '', deviceSn = '', paired = '';
     // what goes to the device, with the Wi-Fi password and the token masked, so the log can be shown or shared
     this._ble.onSend = (m) => this._say('→ ' + JSON.stringify(m, (k, v) => (k === 'password' || k === 'token' ? '***' : v)));
     this._ble.onMessage = (m) => {
       if (m && (m.deviceId || m.deviceSn)) { deviceId = m.deviceId ?? deviceId; deviceSn = m.deviceSn ?? deviceSn; }
+      // the own broker lets this device in from its new address for 10 minutes
+      if (deviceId && deviceId !== paired) { paired = deviceId; void api.command('zendure_pair', { device_id: deviceId }).catch(() => undefined); }
       if (m?.method === 'BLESPP') void this._ble.write({ method: 'BLESPP_OK' });
       this._say('← ' + (typeof m === 'string' ? m : JSON.stringify(m)));
     };
     try {
-      this._say(t('ui.ble.log_broker', 'Broker ({mode}): {url}', { mode: this._mode, url: iotUrl || t('ui.ble.empty', '(leeg)') }));
+      this._say(t('ui.ble.log_broker', 'Broker: {url}', { url: iotUrl || t('ui.ble.empty', '(leeg)') }));
       this._say(t('ui.ble.log_connecting', 'Verbinden… (kies het apparaat in de browser)'));
       await this._ble.connect(this.bleName || undefined);
       this._say(t('ui.ble.log_connected', 'Verbonden: {name}', { name: this._ble.name || '?' }));
@@ -121,19 +119,16 @@ export class ZmBleOnboard extends LitElement {
           ${!available
             ? html`<div class="unavail">${t('ui.ble.unavailable', 'Web Bluetooth is hier niet beschikbaar. Vereist HTTPS (of localhost) en Chrome/Edge.')}</div>`
             : html`
+                <div class="hint">${t('ui.ble.broker', 'Broker')}: ${this._iotUrl || t('ui.ble.no_url', '(onbekend)')}${this.bleName ? ' · ' + this.bleName : ''}</div>
                 <div class="row">
-                  <label>${t('ui.ble.broker', 'Broker')}</label>
-                  <div class="seg">
-                    <button class=${this._mode === 'local' ? 'on' : ''} ?disabled=${this._busy} @click=${() => (this._mode = 'local')}>${t('ui.ble.local', 'Lokaal')}</button>
-                    <button class=${this._mode === 'global' ? 'on' : ''} ?disabled=${this._busy} @click=${() => (this._mode = 'global')}>${t('ui.ble.cloud', 'Cloud')}</button>
-                  </div>
+                  <label>${t('ui.ble.wifi_ssid', 'Wifi-netwerk')}</label>
+                  <input class="zin" type="text" .value=${this._ssid} @input=${(e: Event) => (this._ssid = (e.target as HTMLInputElement).value)} />
                 </div>
-                <div class="hint">iotUrl: ${this._iotUrl || t('ui.ble.no_url', '(niet beschikbaar, cloud-sync nog niet gedraaid)')}${this.bleName ? ' · ' + this.bleName : ''}</div>
                 <div class="row">
                   <label>${t('ui.ble.wifi_psw', 'Wifi-wachtwoord')}</label>
                   <input class="zin" type="password" autocomplete="new-password" .value=${this._pwd} @input=${(e: Event) => (this._pwd = (e.target as HTMLInputElement).value)} />
                 </div>
-                <button class="btn" ?disabled=${this._busy} @click=${this._start}>${this._busy ? t('ui.ble.busy', 'Bezig…') : this._done ? t('ui.app.retry', 'Opnieuw') : t('ui.ble.connect', 'Verbinden')}</button>
+                <button class="btn" ?disabled=${this._busy || !this._ssid || !this._iotUrl} @click=${this._start}>${this._busy ? t('ui.ble.busy', 'Bezig…') : this._done ? t('ui.app.retry', 'Opnieuw') : t('ui.ble.connect', 'Verbinden')}</button>
                 ${this._log.length ? html`<div class="log">${this._log.join('\n')}</div>` : nothing}
               `}
         </div>

@@ -740,6 +740,10 @@
       "account_env": {
         "name": "Firmware channel",
         "description": "Production or the test channel with the betas"
+      },
+      "broker_host": {
+        "name": "Broker",
+        "description": "Where the devices report: Home Assistant itself, or the broker under Expert"
       }
     },
     "section": {
@@ -748,9 +752,6 @@
       "behaviour": "Behaviour",
       "plate": "Nameplate",
       "expert": "Expert",
-      "cloud": "Cloud",
-      "local_broker": "Local broker",
-      "wifi": "Wifi",
       "account": "Account"
     },
     "action": {
@@ -823,11 +824,9 @@
       },
       "ble": {
         "busy": "Busy…",
-        "cloud": "Cloud",
         "connect": "Connect",
         "empty": "(empty)",
-        "local": "Local",
-        "log_broker": "Broker ({mode}): {url}",
+        "log_broker": "Broker: {url}",
         "log_connected": "Connected: {name}",
         "log_connecting": "Connecting… (pick the device in the browser)",
         "log_done": "Done: the device appears as soon as it reports to the broker.",
@@ -838,12 +837,13 @@
         "log_station": "Sending station command…",
         "log_wait": "Waiting for reconnection… ({error})",
         "no_info": "no device info received",
-        "no_url": "(not available, cloud sync has not run yet)",
+        "no_url": "(unknown)",
         "title": "Pair device via Bluetooth",
         "unavailable": "Web Bluetooth is not available here. Requires HTTPS (or localhost) and Chrome/Edge.",
         "log_device": "Device: {id}",
         "broker": "Broker",
-        "wifi_psw": "Wi-Fi password"
+        "wifi_psw": "Wi-Fi password",
+        "wifi_ssid": "Wi-Fi network"
       },
       "chart": {
         "battery": "Battery",

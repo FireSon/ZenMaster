@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json
 import logging
-import random
 import time
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
@@ -39,7 +36,6 @@ from .solarflow import ZendureHub, ZendureHyper, ZendureLegacy, ZendureSolarFlow
 
 _LOGGER = logging.getLogger(__name__)
 
-SF_HAKEY = "C*dafwArEOXK"
 USER_ID = 38555  # the cloud sends this account id in its replies (captured 2026-08-24); the device seems to expect it
 
 
@@ -94,15 +90,13 @@ class ZendureDriver(Driver):
     BLUETOOTH = [{"local_name": "Zen*", "connectable": True}]
     CONFIG = [
         ConfigField("id", {"text": {}}, cast=str, is_key=True, readonly=True),
-        ConfigField("apptoken", {"text": {"type": "password"}}, cast=str, required=False, section_key="cloud"),
-        ConfigField("cloud_url", {"text": {}}, cast=str, required=False, expert=True, section_key="cloud"),
-        ConfigField("mqtt_host", {"text": {}}, cast=str, required=False, section_key="local_broker"),
-        ConfigField("mqtt_port", {"number": {"min": 1, "max": 65535, "mode": "box"}}, cast=int, required=False, section_key="local_broker"),
-        ConfigField("mqtt_user", {"text": {}}, cast=str, required=False, section_key="local_broker"),
-        ConfigField("mqtt_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="local_broker"),
-        ConfigField("mqtt_log", {"boolean": {}}, cast=bool, section_key="local_broker"),
-        ConfigField("wifi_ssid", {"text": {}}, cast=str, required=False, section_key="wifi"),
-        ConfigField("wifi_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="wifi"),
+        ConfigField("broker_host", {"text": {}}, cast=str, required=False, readonly=True),  # where the devices are sent, shown; connect sets it
+        # another broker instead of the own one, and the raw log: expert settings
+        ConfigField("mqtt_host", {"text": {}}, cast=str, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_port", {"number": {"min": 1, "max": 65535, "mode": "box"}}, cast=int, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_user", {"text": {}}, cast=str, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_psw", {"text": {"type": "password"}}, cast=str, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_log", {"boolean": {}}, cast=bool, expert=True, section_key="expert"),
         ConfigField("account", {"text": {}}, cast=str, required=False, section_key="account"),
         ConfigField("account_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="account"),
         ConfigField("account_env", {"select": {"options": ["app", "pre"]}}, cast=str, required=False, expert=True, section_key="account"),
@@ -124,14 +118,10 @@ class ZendureDriver(Driver):
         self.catalog = FirmwareCatalog(self)
         self._catalog_unsub: Any = None
 
-        self.apptoken: str = ""
-        self.cloud_url: str = ""
         self.mqtt_host: str = ""
         self.mqtt_port: int = 1883
         self.mqtt_user: str = ""
         self.mqtt_psw: str = ""
-        self.wifi_ssid: str = ""
-        self.wifi_psw: str = ""
         self.account = ""  # the Zendure app login, only for the firmware catalog
         self.account_psw = ""
         self.account_env = "app"  # app = production, pre = the test environment with the betas
@@ -151,7 +141,7 @@ class ZendureDriver(Driver):
         return str(ip), getattr(api, "port", None) or 8123
 
     async def connect(self) -> None:
-        """connect to local MQTT and list the devices the cloud API knows."""
+        """Connect to the broker: the own one on HA's address, or a configured one."""
 
         # disconnect first
         await self.unload()
@@ -176,39 +166,6 @@ class ZendureDriver(Driver):
         if self.account and self.account_psw:
             self.hass.async_create_task(self._firmware_check())
             self._catalog_unsub = async_track_time_interval(self.hass, lambda _now: self.hass.async_create_task(self._firmware_check()), timedelta(days=7))
-
-        if not self.apptoken:
-            return
-        try:
-            base64_url = base64.b64decode(self.apptoken).decode("utf-8")
-            api_url, app_key = base64_url.rsplit(".", 1)
-            timestamp = int(time.time())
-            nonce = str(random.randint(10000, 99999))
-            sign_params = {"appKey": app_key, "timestamp": timestamp, "nonce": nonce}
-            body_str = "".join(f"{k}{v}" for k, v in sorted(sign_params.items()))
-            sign = hashlib.sha1(f"{SF_HAKEY}{body_str}{SF_HAKEY}".encode()).hexdigest().upper()
-
-            headers = {"Content-Type": "application/json", "timestamp": str(timestamp), "nonce": nonce, "clientid": "zenHa", "sign": sign}
-            session = async_get_clientsession(self.hass)  # HA's shared session, never closed here
-            async with session.post(f"{api_url}/api/ha/deviceList", json={"appKey": app_key}, headers=headers, timeout=ClientTimeout(total=10)) as resp:
-                data = await resp.json()
-
-            code = data.get("code")
-            if code != 200 or not data.get("success"):
-                _LOGGER.warning("Cloud: apikey %s... rejected, code=%s msg=%s", self.apptoken[:10], code, data.get("msg", ""))
-                return
-            result = data["data"]
-            device_list = result.get("deviceList", []) or []
-            _LOGGER.info("Cloud: apikey %s... -> %d device(s), code=%s", self.apptoken[:10], len(device_list), code)
-            for dev in device_list:
-                if dev_id := dev.get("deviceKey", ""):
-                    self.discover(dev.get("snNumber", ""), dev.get("product", ""), dev_id, dev.get("productKey", ""), dev.get("ip", "") or "")
-
-            # the cloud broker address, only as a target for BLE onboarding; we do not connect to it
-            if (mqtt_cfg := result.get("mqtt", {})) and mqtt_cfg.get("url"):
-                self.cloud_url = mqtt_cfg["url"].split(":")[0]
-        except Exception as err:
-            _LOGGER.warning("Cloud API failed for key %s... (%s)", self.apptoken[:10], err)
 
     async def unload(self) -> None:
         """Disconnect all MQTT clients."""

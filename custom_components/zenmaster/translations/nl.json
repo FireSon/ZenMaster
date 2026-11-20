@@ -740,6 +740,10 @@
       "account_env": {
         "name": "Firmwarekanaal",
         "description": "Productie of het testkanaal met de bèta's"
+      },
+      "broker_host": {
+        "name": "Broker",
+        "description": "Waar de devices rapporteren: Home Assistant zelf, of de broker onder Expert"
       }
     },
     "section": {
@@ -748,9 +752,6 @@
       "behaviour": "Gedrag",
       "plate": "Typeplaatje",
       "expert": "Expert",
-      "cloud": "Cloud",
-      "local_broker": "Lokale broker",
-      "wifi": "Wifi",
       "account": "Account"
     },
     "action": {
@@ -823,11 +824,9 @@
       },
       "ble": {
         "busy": "Bezig…",
-        "cloud": "Cloud",
         "connect": "Verbinden",
         "empty": "(leeg)",
-        "local": "Lokaal",
-        "log_broker": "Broker ({mode}): {url}",
+        "log_broker": "Broker: {url}",
         "log_connected": "Verbonden: {name}",
         "log_connecting": "Verbinden… (kies het apparaat in de browser)",
         "log_done": "Klaar: het apparaat verschijnt zodra het zich op de broker meldt.",
@@ -838,12 +837,13 @@
         "log_station": "Station-command versturen…",
         "log_wait": "Wacht op herverbinding… ({error})",
         "no_info": "geen device-info ontvangen",
-        "no_url": "(niet beschikbaar, cloud-sync nog niet gedraaid)",
+        "no_url": "(onbekend)",
         "title": "Apparaat koppelen via Bluetooth",
         "unavailable": "Web Bluetooth is hier niet beschikbaar. Vereist HTTPS (of localhost) en Chrome/Edge.",
         "log_device": "Apparaat: {id}",
         "broker": "Broker",
-        "wifi_psw": "Wifi-wachtwoord"
+        "wifi_psw": "Wifi-wachtwoord",
+        "wifi_ssid": "Wifi-netwerk"
       },
       "chart": {
         "battery": "Accu",
