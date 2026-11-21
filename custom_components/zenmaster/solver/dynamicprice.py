@@ -148,7 +148,7 @@ class DynamicPrice(SolverEntry):
                 await self._refresh(now)
             # after the publish time a refresh, and again every quarter until tomorrow is in
             elif (publish := datetime.combine(now.date(), p.publish, now.tzinfo)) <= now and (p.last_fetch < publish or not p.complete(now)):
-                self.hass.async_create_task(self._refresh(now))
+                self.hass.async_create_task(self._refresh(now, lp.globals["request_solve"]))
         lp.globals["price_valid"] = self._provider.last_fetch is not None
         if self.saldering:  # net metering: exported kWh are settled at the import price
             self.price_sell.data[:] = self.price_buy.data[:]
@@ -201,7 +201,7 @@ class DynamicPrice(SolverEntry):
         self.code_verifier = data.get("code_verifier") or ""
         self.needcode = False  # a restart drops the attempt: press the button again
 
-    async def _refresh(self, now: datetime) -> None:
+    async def _refresh(self, now: datetime, resolve=None) -> None:
         # last_fetch marks a FULLY completed refresh; any failure leaves it unset so the next tick retries
         try:
             buy, sell = await self._provider.fetch(self, now)
@@ -213,6 +213,8 @@ class DynamicPrice(SolverEntry):
         # buy and sell never cross, for every provider and every quarter: crossing reads as free money to the solver
         np.minimum(self.price_sell.data, self.price_buy.data, out=self.price_sell.data)
         self.price_buy.known = self.price_sell.known = self._provider.known_until  # the outlook dashes the prices past this point
+        if resolve:
+            resolve()  # new prices: trigger a fresh solve, which applies saldering in entry_prerun
         self._provider.last_fetch = now
 
 
