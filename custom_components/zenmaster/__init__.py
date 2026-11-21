@@ -6,7 +6,7 @@ import logging
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = ["sensor", "number", "binary_sensor", "select", "switch", "button", "time"]
+PLATFORMS = ["sensor", "number", "binary_sensor", "select", "switch", "button", "time", "update"]
 
 
 async def async_remove_config_entry_device(hass, entry, device) -> bool:

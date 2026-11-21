@@ -536,6 +536,11 @@
       "arm": {
         "name": "Préparer"
       }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
     }
   },
   "config_panel": {
@@ -723,6 +728,22 @@
       "duration_entity": {
         "name": "Durée du programme",
         "description": "Facultatif : l'estimation par l'appareil de la durée du programme choisi. Le cycle appris est étiré ou raccourci à cette durée ; sans valeur, le cycle appris s'applique."
+      },
+      "account": {
+        "name": "Compte Zendure",
+        "description": "E-mail de l'app Zendure, uniquement pour la liste des firmwares"
+      },
+      "account_psw": {
+        "name": "Mot de passe",
+        "description": "Mot de passe de l'app Zendure ; enregistré dans Home Assistant"
+      },
+      "account_env": {
+        "name": "Canal firmware",
+        "description": "Production ou le canal de test avec les bêtas"
+      },
+      "broker_host": {
+        "name": "Broker",
+        "description": "Où les appareils rapportent : Home Assistant lui-même, ou le broker sous Expert"
       }
     },
     "section": {
@@ -731,9 +752,7 @@
       "behaviour": "Comportement",
       "plate": "Plaque signalétique",
       "expert": "Expert",
-      "cloud": "Cloud",
-      "local_broker": "Broker local",
-      "wifi": "Wi-Fi"
+      "account": "Compte"
     },
     "action": {
       "arm_off": "Ne pas armer",
@@ -778,6 +797,10 @@
         "pause": "Pause/reprise",
         "remote": "Démarrage à distance",
         "automation": "Automatisation"
+      },
+      "account_env": {
+        "app": "Production",
+        "pre": "Test (bêta)"
       }
     },
     "ui": {
@@ -801,11 +824,9 @@
       },
       "ble": {
         "busy": "Occupé…",
-        "cloud": "Cloud",
         "connect": "Connecter",
         "empty": "(vide)",
-        "local": "Local",
-        "log_broker": "Broker ({mode}) : {url}",
+        "log_broker": "Broker: {url}",
         "log_connected": "Connecté : {name}",
         "log_connecting": "Connexion… (choisissez l'appareil dans le navigateur)",
         "log_done": "Terminé : l'appareil apparaît dès qu'il se signale au broker.",
@@ -816,12 +837,13 @@
         "log_station": "Envoi de la commande station…",
         "log_wait": "Attente de la reconnexion… ({error})",
         "no_info": "aucune info appareil reçue",
-        "no_url": "(non disponible, la synchro cloud n'a pas encore eu lieu)",
+        "no_url": "(inconnu)",
         "title": "Associer un appareil via Bluetooth",
         "unavailable": "Web Bluetooth n'est pas disponible ici. Nécessite HTTPS (ou localhost) et Chrome/Edge.",
         "log_device": "Appareil : {id}",
         "broker": "Broker",
-        "wifi_psw": "Mot de passe Wi-Fi"
+        "wifi_psw": "Mot de passe Wi-Fi",
+        "wifi_ssid": "Réseau Wi-Fi"
       },
       "chart": {
         "battery": "Batterie",

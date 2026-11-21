@@ -27,6 +27,9 @@ _LOGGER = logging.getLogger(__name__)
 COMMAND_CHAR = "0000c304-0000-1000-8000-00805f9b34fb"
 READ_CHAR = "0000c305-0000-1000-8000-00805f9b34fb"
 
+# the BLE advertised name of a legacy/Hyper device starts with a per-product letter (from solarflow-bt-manager), not sn[0]
+BLE_LETTER = {"hyper": "E", "hub1200": "P", "hub2000": "H", "aio": "R", "ace": "F"}
+
 
 def signed_convert(v) -> int:
     """Decode a 16-bit two's complement value."""
@@ -77,10 +80,16 @@ class ZendureDevice:
         if (model.lower().startswith("solarflow") or "smart" in model.lower()) and len(sn) >= 4:
             self.ble_name: str | None = f"Zen{sn[0]}{sn[2]}{sn[3]}_{sn[-1]}"  # SolarFlow and smart meters
         elif len(sn) >= 3:
-            self.ble_name = f"Zen{sn[0]}{sn[2]}_{sn[-2:]}"  # Hyper and others
+            # legacy and Hyper advertise Zen<product letter><sn[2]>_<sn[-2:]>; the first letter is per product, not sn[0]
+            letter = next((v for k, v in BLE_LETTER.items() if k in model.lower()), sn[0])
+            self.ble_name = f"Zen{letter}{sn[2]}_{sn[-2:]}"
         else:
             self.ble_name = None
         self._msg_id: int = 100000
+        self.modules: dict[str, int] = {}  # firmware version per module, from the device's own firmware report
+        self.esp_version = 0  # the zenSDK version (ESP32 module); 0 = zenSDK 2, which does not report it
+        self.ota: dict | None = None  # the pending firmware update, the list the device fetches from the API
+        self.firmware: Any = None  # the HA update entity, once the account lists the device
         self._ble_client: BleakClient | None = None
         # the device's BLESPP greeting, which a connect waits for
         self._ble_spp = asyncio.Event()
@@ -90,6 +99,11 @@ class ZendureDevice:
 
     def subentry_data(self) -> dict[str, Any]:
         return {"product": self.model, "sn": self.sn, "device_id": self.device_key, "prodkey": self.prodkey, "ip": self.ip or "", "blemac": self.blemac}
+
+    def firmware_report(self, payload: dict) -> None:
+        # the module versions the device runs; only zenSDK 3 lists its own ESP32 module
+        self.modules = {str(m["module"]): int(m["version"]) for m in payload.get("modules") or [] if isinstance(m, dict) and "module" in m and "version" in m}
+        self.esp_version = self.modules.get("ESP32", 0)
 
     def _ble_close(self) -> None:
         # the BLE link closed and forgotten, so the device's connection slot is free for the next attempt or another client
