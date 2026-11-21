@@ -9,6 +9,16 @@ __pycache__/
 ui/node_modules/
 ui/dist/
 /firmware/
+/tools/
+
+# firmware binaries, never in git (any location)
+*.bin
+*.elf
+*.hex
+
+# local experiment artifacts
+evbox_apk/
+*.log
 
 # local data exports for experiments (production history)
 data/

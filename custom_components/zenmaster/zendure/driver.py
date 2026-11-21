@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json
 import logging
-import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -18,22 +15,27 @@ import paho.mqtt.client as mqtt
 from aiohttp import ClientTimeout
 from bleak import BleakClient
 from bleak_retry_connector import establish_connection
-from homeassistant.components import bluetooth
+from homeassistant.components import bluetooth, network
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 
 from ..config import ConfigField
 from ..const import DOMAIN
 from ..device import DeviceState, DistributionDevice
 from ..driver import Driver
 from ..entity import EntityDevice
+from ..update import HaUpdate
 from .battery import ZendureBattery
+from .broker import ZendureBroker, masked
 from .device import COMMAND_CHAR, READ_CHAR, ConnectionType, ZendureDevice
+from .firmware import FirmwareCatalog, manifest, versions
+from .local_api import API_PATH, ZendureApiView
 from .smartmeter import ZendureSmartMeter
 from .solarflow import ZendureHub, ZendureHyper, ZendureLegacy, ZendureSolarFlow
 
 _LOGGER = logging.getLogger(__name__)
 
-SF_HAKEY = "C*dafwArEOXK"
 USER_ID = 38555  # the cloud sends this account id in its replies (captured 2026-08-24); the device seems to expect it
 
 
@@ -88,15 +90,16 @@ class ZendureDriver(Driver):
     BLUETOOTH = [{"local_name": "Zen*", "connectable": True}]
     CONFIG = [
         ConfigField("id", {"text": {}}, cast=str, is_key=True, readonly=True),
-        ConfigField("apptoken", {"text": {"type": "password"}}, cast=str, required=False, section_key="cloud"),
-        ConfigField("cloud_url", {"text": {}}, cast=str, required=False, expert=True, section_key="cloud"),
-        ConfigField("mqtt_host", {"text": {}}, cast=str, required=False, section_key="local_broker"),
-        ConfigField("mqtt_port", {"number": {"min": 1, "max": 65535, "mode": "box"}}, cast=int, required=False, section_key="local_broker"),
-        ConfigField("mqtt_user", {"text": {}}, cast=str, required=False, section_key="local_broker"),
-        ConfigField("mqtt_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="local_broker"),
-        ConfigField("mqtt_log", {"boolean": {}}, cast=bool, section_key="local_broker"),
-        ConfigField("wifi_ssid", {"text": {}}, cast=str, required=False, section_key="wifi"),
-        ConfigField("wifi_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="wifi"),
+        ConfigField("broker_host", {"text": {}}, cast=str, required=False, readonly=True),  # where the devices are sent, shown; connect sets it
+        # another broker instead of the own one, and the raw log: expert settings
+        ConfigField("mqtt_host", {"text": {}}, cast=str, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_port", {"number": {"min": 1, "max": 65535, "mode": "box"}}, cast=int, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_user", {"text": {}}, cast=str, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_psw", {"text": {"type": "password"}}, cast=str, required=False, expert=True, section_key="expert"),
+        ConfigField("mqtt_log", {"boolean": {}}, cast=bool, expert=True, section_key="expert"),
+        ConfigField("account", {"text": {}}, cast=str, required=False, section_key="account"),
+        ConfigField("account_psw", {"text": {"type": "password"}}, cast=str, required=False, section_key="account"),
+        ConfigField("account_env", {"select": {"options": ["app", "pre"]}}, cast=str, required=False, expert=True, section_key="account"),
     ]
     ADD = [  # a device that is never found: its identity by hand, the addresses it is reached on
         ConfigField("sn", {"text": {}}, cast=str),
@@ -111,58 +114,58 @@ class ZendureDriver(Driver):
         self._mqtt_log = logging.getLogger(f"{DOMAIN}.mqtt")  # raw payload log; the file is opened on first use
         self.mqtt_log = False  # write every raw MQTT payload to zenmaster_mqtt.jsonl
         self._ble_probed: set[str] = set()  # addresses asked over Bluetooth who they are; once per run
+        self.broker = ZendureBroker(self)  # the own broker, used when no other broker is configured
+        self.catalog = FirmwareCatalog(self)
+        self._catalog_unsub: Any = None
 
-        self.apptoken: str = ""
-        self.cloud_url: str = ""
         self.mqtt_host: str = ""
         self.mqtt_port: int = 1883
         self.mqtt_user: str = ""
         self.mqtt_psw: str = ""
-        self.wifi_ssid: str = ""
-        self.wifi_psw: str = ""
+        self.account = ""  # the Zendure app login, only for the firmware catalog
+        self.account_psw = ""
+        self.account_env = "app"  # app = production, pre = the test environment with the betas
+        self.local_ip = "127.0.0.1"  # HA's own LAN address: the devices reach the API and the own broker there
+        self.api_url = ""  # the API address a device gets at registration
+        self.broker_host = ""  # the broker a device is sent to: the configured one, else HA itself
+        self.firmware_dir = hass.config.path(f"{DOMAIN}_firmware") if hasattr(getattr(hass, "config", None), "path") else ""
+
+    async def _lan_address(self) -> tuple[str, int]:
+        # HA's address and HTTP port as HA knows them; before http is up, the source address of the host
+        api = getattr(getattr(self.hass, "config", None), "api", None)
+        if (ip := getattr(api, "local_ip", None)) is None:
+            try:
+                ip = await network.async_get_source_ip(self.hass)
+            except Exception:  # no network component (tests)
+                ip = "127.0.0.1"
+        return str(ip), getattr(api, "port", None) or 8123
 
     async def connect(self) -> None:
-        """connect to local MQTT and list the devices the cloud API knows."""
+        """Connect to the broker: the own one on HA's address, or a configured one."""
 
         # disconnect first
         await self.unload()
 
-        # connect to local MQTT
+        # the addresses the devices get: the API at registration, the broker in the platform config and at pairing
+        self.local_ip, port = await self._lan_address()
+        self.api_url = f"http://{self.local_ip}:{port}{API_PATH}"
+        self.broker_host = self.mqtt_host or self.local_ip
+
+        # the API view is registered once per HA run; it finds the driver of the running coordinator itself
+        if (data := getattr(self.hass, "data", None)) is not None and hasattr(self.hass, "http") and not data.get(f"{DOMAIN}_zendure_api"):
+            data[f"{DOMAIN}_zendure_api"] = True
+            self.hass.http.register_view(ZendureApiView(self.hass))
+
+        # a configured broker is used as before; without one, ZenMaster is the broker on its own LAN address
         if self.mqtt_host != "":
             self._add_mqtt_client(ConnectionType.LOCAL, self.mqtt_host, self.mqtt_port, self.mqtt_user, self.mqtt_psw)
+        else:
+            await self.broker.start(self.local_ip)
 
-        if not self.apptoken:
-            return
-        try:
-            base64_url = base64.b64decode(self.apptoken).decode("utf-8")
-            api_url, app_key = base64_url.rsplit(".", 1)
-            timestamp = int(time.time())
-            nonce = str(random.randint(10000, 99999))
-            sign_params = {"appKey": app_key, "timestamp": timestamp, "nonce": nonce}
-            body_str = "".join(f"{k}{v}" for k, v in sorted(sign_params.items()))
-            sign = hashlib.sha1(f"{SF_HAKEY}{body_str}{SF_HAKEY}".encode()).hexdigest().upper()
-
-            headers = {"Content-Type": "application/json", "timestamp": str(timestamp), "nonce": nonce, "clientid": "zenHa", "sign": sign}
-            session = async_get_clientsession(self.hass)  # HA's shared session, never closed here
-            async with session.post(f"{api_url}/api/ha/deviceList", json={"appKey": app_key}, headers=headers, timeout=ClientTimeout(total=10)) as resp:
-                data = await resp.json()
-
-            code = data.get("code")
-            if code != 200 or not data.get("success"):
-                _LOGGER.warning("Cloud: apikey %s... rejected, code=%s msg=%s", self.apptoken[:10], code, data.get("msg", ""))
-                return
-            result = data["data"]
-            device_list = result.get("deviceList", []) or []
-            _LOGGER.info("Cloud: apikey %s... -> %d device(s), code=%s", self.apptoken[:10], len(device_list), code)
-            for dev in device_list:
-                if dev_id := dev.get("deviceKey", ""):
-                    self.discover(dev.get("snNumber", ""), dev.get("product", ""), dev_id, dev.get("productKey", ""), dev.get("ip", "") or "")
-
-            # the cloud broker address, only as a target for BLE onboarding; we do not connect to it
-            if (mqtt_cfg := result.get("mqtt", {})) and mqtt_cfg.get("url"):
-                self.cloud_url = mqtt_cfg["url"].split(":")[0]
-        except Exception as err:
-            _LOGGER.warning("Cloud API failed for key %s... (%s)", self.apptoken[:10], err)
+        # the firmware catalog of the account: once now, then weekly
+        if self.account and self.account_psw:
+            self.hass.async_create_task(self._firmware_check())
+            self._catalog_unsub = async_track_time_interval(self.hass, lambda _now: self.hass.async_create_task(self._firmware_check()), timedelta(days=7))
 
     async def unload(self) -> None:
         """Disconnect all MQTT clients."""
@@ -173,6 +176,10 @@ class ZendureDriver(Driver):
             # loop_stop joins the paho thread; off the event loop, or a paho callback blocking on run_coroutine_threadsafe deadlocks HA
             await asyncio.get_running_loop().run_in_executor(None, client.loop_stop)
         self._mqtt_clients.clear()
+        self.broker.close()
+        if self._catalog_unsub is not None:
+            self._catalog_unsub()
+            self._catalog_unsub = None
         ZendureBattery._registry.clear()  # class-level registry must not hand out stale instances after a reload
 
     def discover(self, sn: str, product: str, device_id: str = "", prodkey: str = "", ip: str = "", blemac: str = "") -> None:
@@ -301,14 +308,14 @@ class ZendureDriver(Driver):
         return {"prodkey": str(report.get("productKey") or ""), "device_id": str(report.get("deviceId") or ""), "sn": str(report.get("sn") or ""), "product": str(report.get("product") or ""), "ip": ip}
 
     def match_bluetooth(self, info: Any) -> EntityDevice | None:
-        # the advertised name is the BLE name of one of our devices; the manufacturer data carries a serial tail that settles ties
+        # identify by the serial tail in the manufacturer data (authoritative, like the vendor app); the derived BLE name is only a fallback when there is none, since that name is wrong when a serial does not start with the product letter
+        tails = [m.decode("utf-8", "ignore")[:-1] for m in (getattr(info, "manufacturer_data", None) or {}).values() if m and len(m) > 1]
         for d in self.devices.values():
-            if not d.ble_name or not (info.name or "").startswith(d.ble_name):
-                continue
-            tails = [m.decode("utf-8", "ignore")[:-1] for m in (getattr(info, "manufacturer_data", None) or {}).values() if m and len(m) > 1]
-            if tails and not any(t and d.sn.endswith(t) for t in tails):
-                continue
-            return d
+            if tails:
+                if any(t and d.sn.endswith(t) for t in tails):
+                    return d
+            elif d.ble_name and (info.name or "").startswith(d.ble_name):
+                return d
         return None
 
     def _add_mqtt_client(self, conn: ConnectionType, host: str, port: int, username: str, password: str, client_id: str | None = None) -> None:
@@ -347,13 +354,7 @@ class ZendureDriver(Driver):
                 return  # empty
 
             if self.mqtt_log:
-                if not self._mqtt_log.handlers:  # opened here, on the paho thread, so the event loop never blocks
-                    handler = RotatingFileHandler(self.hass.config.path(f"{DOMAIN}_mqtt.jsonl"), maxBytes=20_000_000, backupCount=3)
-                    handler.setFormatter(logging.Formatter("%(message)s"))
-                    self._mqtt_log.addHandler(handler)
-                    self._mqtt_log.setLevel(logging.INFO)
-                    self._mqtt_log.propagate = False
-                self._mqtt_log.info(json.dumps({"t": time.time(), "topic": msg.topic, "payload": msg.payload.decode("utf-8", "ignore")}))
+                self.log_raw(msg.topic, masked(msg.payload.decode("utf-8", "ignore")))
 
             _, prodkey, deviceid, topic = msg.topic.split("/", 3)
             payload = json.loads(msg.payload.decode("utf-8", "ignore"))
@@ -365,24 +366,51 @@ class ZendureDriver(Driver):
         except Exception as ex:
             _LOGGER.warning("MQTT message %s: %s", msg.topic, ex)
 
+    def log_raw(self, topic: str, payload: str) -> None:
+        # one raw payload in zenmaster_mqtt.jsonl; called off the event loop (paho thread or executor), so the file never blocks it
+        if not self._mqtt_log.handlers:
+            handler = RotatingFileHandler(self.hass.config.path(f"{DOMAIN}_mqtt.jsonl"), maxBytes=20_000_000, backupCount=3)
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self._mqtt_log.addHandler(handler)
+            self._mqtt_log.setLevel(logging.INFO)
+            self._mqtt_log.propagate = False
+        self._mqtt_log.info(json.dumps({"t": time.time(), "topic": topic, "payload": payload}))
+
     def _on_device_message(self, client: Any, userdata: Any, msg_topic: str, prodkey: str, deviceid: str, topic: str, payload: dict) -> None:
         """A broker message on the event loop: the device it belongs to handles it, an unknown one is discovered."""
         try:
+            # a registration is answered for every device, also one not known yet: the API address rides along
+            if topic == "register":
+                self._register_reply(client, userdata, msg_topic, payload)
+                payload = {"deviceSn": (payload.get("params") or {}).get("deviceSn")}  # its serial, for the discovery below
             if (d := next((d for d in self.devices.values() if d.device_key == deviceid), None)) is not None:
                 # a device on zenSDK stays there: the broker still brings its reports, the commands go over HTTP;
-                # otherwise the client that brought the report sends the commands, also after a reconnect made a new one
+                # otherwise the client that brought the report sends the commands, also after a reconnect made a new one.
+                # The client is kept either way: the broker messages (dev/debug, fetchHems, firmware) use it
+                d.mqtt = client
                 if d.connection != ConnectionType.ZENSDK:
-                    d.connection, d.mqtt = userdata, client
+                    d.connection = userdata
 
                 match topic:
                     case "properties/report":
                         d.update_properties(payload, time.time())
 
-                    case "register":
-                        _LOGGER.info("Register for %s => %s", d.device_id, payload)
-                        if userdata == ConnectionType.LOCAL:
-                            reply = json.dumps({"token": payload.get("params", {}).get("token"), "result": 0})  # flat, exactly like the proven Brandthus reply
-                            client.publish(f"iot{msg_topic}/replay", reply)  # no retain: a retained replay reboot-loops the device
+                    case "properties/energy":
+                        # the 1.5 s report of a device with a hemsId: its two powers under the names of the full report
+                        p = payload.get("properties") or {}
+                        d.update_properties({"properties": {k: p[s] for s, k in (("chargePower", "gridInputPower"), ("outputPower", "outputHomePower")) if s in p}}, time.time())
+
+                    case "firmware/report":
+                        d.firmware_report(payload)
+                        self._firmware_show(d)
+
+                    case "firmware/download/progress" | "firmware/upgrade/progress":
+                        # the download and then the install, each 0 to 100; a failure or the end clears the pending update
+                        busy = bool(payload.get("success", True)) and not payload.get("complete")
+                        if not busy:
+                            _LOGGER.info("Zendure firmware %s on %s: %s", topic, d.name, {k: payload.get(k) for k in ("module", "success", "complete", "errorReason")})
+                            d.ota = None
+                        self._firmware_show(d, payload.get("progress") if busy else None, busy)
 
                     case "function/invoke/reply":
                         if isinstance(d, ZendureSolarFlow) and payload.get("messageId") == d._msg_id:
@@ -393,6 +421,8 @@ class ZendureDriver(Driver):
                         z = datetime.now().astimezone().strftime("%z")
                         reply = json.dumps({"zoneOffset": f"{z[:3]}:{z[3:]}", "timestamp": int(time.time()), "userId": USER_ID, "messageId": payload.get("messageId", "none")})
                         client.publish(f"iot{msg_topic}/reply", reply)
+                        # a device asks the time at every connect and after each restart: the log upload to the cloud goes off again
+                        client.publish(f"iot/{prodkey}/{deviceid}/dev/debug", json.dumps({"enable_log": False}))
             else:
                 if sn := payload.get("log", {}).get("sn") or payload.get("slaveSN") or payload.get("properties", {}).get("slaveSn") or payload.get("deviceSn"):
                     if (known := self.devices.get(sn)) is None:
@@ -404,3 +434,39 @@ class ZendureDriver(Driver):
                         known.config_changed()
         except Exception as ex:
             _LOGGER.warning("MQTT message %s: %s", msg_topic, ex)
+
+    async def _firmware_check(self) -> None:
+        try:
+            await self.catalog.refresh()
+        except Exception as err:
+            _LOGGER.warning("Zendure firmware catalog: %s", err)
+            return
+        for d in self.devices.values():
+            self._firmware_show(d)
+
+    def _firmware_show(self, d: Any, progress: int | None = None, busy: bool = False) -> None:
+        # a device the account lists gets an update entity: zenSDK running versus zenSDK on offer
+        if not hasattr(d, "mqtt_publish") or (entry := self.catalog.entries.get(d.sn)) is None:
+            return
+        if getattr(d, "firmware", None) is None:
+            d.firmware = HaUpdate(d, "firmware", self._firmware_install)
+        d.firmware.show(*versions(entry, d.esp_version), progress, busy)
+
+    async def _firmware_install(self, entity: HaUpdate) -> None:
+        # the files to the HA storage, the list to the local API, then the device is told to fetch it
+        d = entity.device
+        if (entry := self.catalog.entries.get(d.sn)) is None or d.mqtt is None:
+            raise HomeAssistantError(f"{d.name}: no firmware on offer, or not on the broker")
+        await self.catalog.fetch(entry)
+        d.ota = manifest(entry, self.api_url)
+        d.mqtt_publish("firmware/download", {})
+        self._firmware_show(d, None, True)
+
+    def _register_reply(self, client: Any, userdata: Any, msg_topic: str, payload: dict) -> None:
+        # zenSDK 3 rejects a reply without params; both versions store the API address from it and leave the cloud API
+        _LOGGER.info("Register on %s", msg_topic)
+        if userdata != ConnectionType.LOCAL:
+            return
+        token = (payload.get("params") or {}).get("token")
+        reply = {"token": token, "result": 0, "params": {"result": 0, "token": token, "apiUrl": self.api_url, "userId": USER_ID}}
+        client.publish(f"iot{msg_topic}/replay", json.dumps(reply))  # no retain: a retained replay reboot-loops the device

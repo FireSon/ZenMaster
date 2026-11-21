@@ -1,0 +1,9 @@
+cert.pem and key.pem are the public test certificate and key of EMQX, unchanged:
+https://github.com/emqx/emqx/tree/v5.0.0/apps/emqx/etc/certs
+
+Copyright EMQ Technologies Co., Ltd. Licensed under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+
+The Zendure firmware trusts only brokers under the EMQ RootCA, so the own broker presents this
+certificate. The key is public: anyone on the LAN can pose as a broker with it. That holds for every
+broker the devices use; keep the devices on their own network where possible. Valid until 6 May 2030.
