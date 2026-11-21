@@ -64,6 +64,7 @@ static String g_bUser, g_bPass;                   // MQTT broker login
 static bool g_hasWifi = false;
 static String g_homeId;              // account home from the BLE token, if the app sends one
 static volatile bool g_reRegister = false;  // a new BLE token arrived while connected: re-register on the loop task
+static int g_espVer = 0;             // override the reported ESP32 firmware version (0 = profile default), for update-flow tests
 static bool g_bound = false;         // register/replay with result 0 succeeded: report bindstate=1 like a real device
 static String g_apiUrl, g_userId;    // stored from the register reply, like the real device does
 
@@ -110,6 +111,7 @@ static void loadConfig() {
   g_iotUrl = g_prefs.getString("wiot", "");
   g_bUser = g_prefs.getString("buser", "");
   g_bPass = g_prefs.getString("bpass", "");
+  g_espVer = g_prefs.getInt("espver", 0);
   g_prefs.end();
   g_product = p.product; g_letter = p.letter; g_outMax = p.outMax; g_inMax = p.inMax; g_kwh = p.kwh; g_style = p.style;
   g_bleName = bleName(g_letter, g_sn);
@@ -145,9 +147,10 @@ static void handleSerial() {
       else if (cmd == "wssid") { saveStr("wssid", arg); Serial.println("set; set wpass + reboot"); }
       else if (cmd == "wpass") { saveStr("wpass", arg); Serial.println("set; reboot to join"); }
       else if (cmd == "broker") { saveStr("wiot", arg); Serial.println("set; reboot"); }
+      else if (cmd == "espver") { g_espVer = arg.toInt(); g_prefs.begin("zensim", false); g_prefs.putInt("espver", g_espVer); g_prefs.end(); Serial.printf("espVer=%d (0=default); applies on next firmware report\n", g_espVer); }
       else if (cmd == "forget") { g_prefs.begin("zensim", false); g_prefs.remove("wssid"); g_prefs.remove("wpass"); g_prefs.remove("wiot"); g_prefs.end(); Serial.println("wifi cleared; reboot to pair"); }
       else if (cmd == "reboot") ESP.restart();
-      else Serial.println("commands: show | profile <name> | sn <> | deviceid <> | prodkey <> | wssid <> | wpass <> | broker <> | forget | reboot");
+      else Serial.println("commands: show | profile <name> | sn <> | deviceid <> | prodkey <> | wssid <> | wpass <> | broker <> | espver <n> | forget | reboot");
     }
     line = "";
   }
@@ -342,19 +345,39 @@ static void publish(const char* sub, JsonDocument& body) {
 }
 static void reportProps(JsonObject props) { JsonDocument b; b["product"] = g_product; b["properties"] = props; publish("properties/report", b); }
 
+// the full ACE state, fields and packData like a real ACE1500 getAll report (captured on the live broker)
+static void aceFullReport() {
+  long t = g_target; int soc = (int)roundf(g_soc);
+  JsonDocument d; d["product"] = g_product; JsonObject p = d["properties"].to<JsonObject>();
+  p["electricLevel"] = soc; p["socSet"] = 1000; p["minSoc"] = 0; p["packNum"] = 1;
+  p["acMode"] = 2; p["acDelay"] = 30; p["autoModel"] = (t != 0) ? 8 : 0; p["packState"] = 0;
+  p["inputLimit"] = g_inMax; p["acSwitch"] = 1; p["dcSwitch"] = 0; p["masterSwitch"] = 1; p["buzzerSwitch"] = 1;
+  p["acOutputPower"] = (int)max(0L, t); p["dcOutputPower"] = 0;
+  p["gridInputPower"] = (int)max(0L, -t); p["packInputPower"] = (int)max(0L, t); p["outputPackPower"] = (int)max(0L, -t);
+  p["solarInputPower"] = 0; p["solarPower1"] = 0;
+  p["remainOutTime"] = 59940; p["remainInputTime"] = 59940;
+  p["totalBatteryVolt"] = 2000; p["temperature"] = 0; p["batteryElectric"] = 0; p["batterCapacity"] = 0;
+  p["masterFirmwareVersion"] = g_espVer ? g_espVer : 4112; p["bmsFirmwareVersion"] = 8223; p["acFirmwareVersion"] = 4102;
+  p["dcFirmwareVersion"] = 4104; p["mpptFirmwareVersion"] = 4118;
+  JsonObject b = d["packData"].to<JsonArray>().add<JsonObject>();
+  b["sn"] = "BO4NHMHVM2SIM01"; b["socLevel"] = soc; b["power"] = (int)t; b["state"] = (t > 0) ? 1 : (t < 0 ? 2 : 0);
+  b["maxTemp"] = 2971; b["totalVol"] = 4740; b["maxVol"] = 316; b["minVol"] = 315; b["softVersion"] = 8223;
+  publish("properties/report", d);
+}
+
 static void sendFirmware() {
   JsonDocument fw; JsonArray mods = fw["modules"].to<JsonArray>();
-  if (g_style == ST_ACE) { const char* n[] = {"MASTER","BMS","DC","AC","MPPT"}; int v[] = {4112,8223,4104,4102,4118}; for (int i=0;i<5;i++){ JsonObject m=mods.add<JsonObject>(); m["module"]=n[i]; m["version"]=v[i]; } }
-  else { const char* n[] = {"MASTER","ESP32"}; int v[] = {4133,12309}; for (int i=0;i<2;i++){ JsonObject m=mods.add<JsonObject>(); m["module"]=n[i]; m["version"]=v[i]; } }
+  if (g_style == ST_ACE) { const char* n[] = {"MASTER","BMS","DC","AC","MPPT"}; int v[] = {g_espVer ? g_espVer : 4112, 8223, 4104, 4102, 4118}; for (int i=0;i<5;i++){ JsonObject m=mods.add<JsonObject>(); m["module"]=n[i]; m["version"]=v[i]; } }  // espver overrides MASTER for ACE
+  else { const char* n[] = {"MASTER","ESP32"}; int v[] = {4133, g_espVer ? g_espVer : 12309}; for (int i=0;i<2;i++){ JsonObject m=mods.add<JsonObject>(); m["module"]=n[i]; m["version"]=v[i]; } }  // espver override for update-flow tests
   fw["deviceSn"] = g_sn; publish("firmware/report", fw);
 }
 
 static void sendFullReport() {
+  if (g_style == ST_ACE) { aceFullReport(); return; }  // ACE has its own rich field set + packData
   JsonDocument d; JsonObject p = d.to<JsonObject>();
   p["electricLevel"] = (int)roundf(g_soc); p["socSet"] = 1000; p["minSoc"] = 0;
   p["gridInputPower"] = 0; p["outputHomePower"] = 0; p["solarInputPower"] = 0;
-  if (g_style == ST_ACE) { p["acOutputPower"] = 0; p["inputLimit"] = g_inMax; p["acMode"] = 2; p["autoModel"] = 0; }
-  else { p["inverseMaxPower"] = g_outMax; p["chargeMaxLimit"] = g_inMax; p["acMode"] = 2; p["gridState"] = 1; }
+  p["inverseMaxPower"] = g_outMax; p["chargeMaxLimit"] = g_inMax; p["acMode"] = 2; p["gridState"] = 1;
   reportProps(p);
 }
 
@@ -477,19 +500,17 @@ static void reportTick() {
   float dt = (millis() - last) / 1000.0f; last = millis();
   if (g_targetAt && millis() >= g_targetAt) { emitPower(); g_targetAt = 0; }
   g_soc = constrain(g_soc - g_target * dt / 3600.0f / (g_kwh * 1000.0f) * 100.0f, 0.0f, 100.0f);
+  if (g_style == ST_ACE) { aceFullReport(); return; }  // ACE streams its full state
   JsonDocument d; JsonObject p = d.to<JsonObject>(); p["electricLevel"] = (int)roundf(g_soc); reportProps(p);
 }
 
 static void joinLan() {
   // legacy devices keep BLE up alongside Wi-Fi; do not deinit it here
-  // connect on the scanned channel (not a pinned BSSID: that breaks the WPA2/WPA3 auth) so there is no full scan
+  // plain join: let the driver pick the best AP (FSNW6565 is a mesh on several channels; pinning a channel breaks the handshake)
   static int fails = 0;
-  int ch = 0;
-  for (int i = 0; i < g_apCount; i++) if (g_apSsid[i] == g_ssid) { ch = g_apCh[i]; break; }
-  Serial.printf("Wi-Fi joining %s (pw len %d, ch %d)\n", g_ssid.c_str(), g_pass.length(), ch);
+  Serial.printf("Wi-Fi joining %s (pw len %d)\n", g_ssid.c_str(), g_pass.length());
   WiFi.mode(WIFI_STA);
-  if (ch) WiFi.begin(g_ssid.c_str(), g_pass.c_str(), ch);
-  else WiFi.begin(g_ssid.c_str(), g_pass.c_str());
+  WiFi.begin(g_ssid.c_str(), g_pass.c_str());
   int t = 0;
   while (WiFi.status() != WL_CONNECTED && t++ < 20) { delay(500); }
   if (WiFi.status() != WL_CONNECTED) {
@@ -537,9 +558,9 @@ void setup() {
 }
 
 void loop() {
+  handleSerial();  // serial console works in every mode, also when provisioned (profile/forget/reboot)
   if (g_webStarted) g_web.handleClient();
   if (!g_provisioned) {
-    handleSerial();
     static unsigned long lastBle = 0;
     if (g_bleStream && millis() - lastBle > 2000) { lastBle = millis(); bleReport(false); }  // stream after a BLE read getAll
     delay(20); return;
