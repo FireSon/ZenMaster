@@ -4,7 +4,7 @@
   "bluetooth": [{"local_name": "Zen*", "connectable": true}],
   "codeowners": ["@FireSon"],
   "config_flow": true,
-  "dependencies": ["http", "frontend", "panel_custom", "websocket_api", "recorder", "bluetooth", "zeroconf"],
+  "dependencies": ["http", "frontend", "panel_custom", "websocket_api", "recorder", "bluetooth", "zeroconf", "network"],
   "documentation": "https://github.com/FireSon/ZenMaster",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/FireSon/ZenMaster/issues",
