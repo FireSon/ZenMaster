@@ -257,6 +257,18 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
         # update last update
         self._msg_update = now
 
+        # an ACE reports its Hub in bindSn: out of the fleet, and it attaches as the Hub's charge path
+        if (bind := payload.get("bindSn", "-1")) != "-1":
+            if self.allow_control:
+                self.allow_control = False
+                self.set_state(DeviceState.CONTROLLER)
+                self.driver.distribution.devices.remove(self)
+                self.config_changed()
+            if (hub := self.driver.devices.get(bind)) is not None and hub.ace is not self:
+                hub.ace = self
+                hub.power_profile[1].power = self.charge_max_power
+                hub.power_profile[1].__post_init__()
+
         # update the batteries
         if batprops := payload.get("packData"):
             for bp in batprops:
@@ -418,11 +430,24 @@ class ZendureLegacy(ZendureSolarFlow):
 
 
 class ZendureHub(ZendureLegacy):
-    """Hub 1200 / Hub 2000: deviceAutomation with a bare number; the Hub cannot charge from AC, so its charge profile is 0."""
+    """Hub 1200 / Hub 2000: discharges itself; charges through an attached ACE (bindSn)."""
 
-    # open: with an ACE 1500 attached the AC input exists, but the app sets inputLimit on the ACE, not here (#1508)
+    ace: ZendureSolarFlow | None = None  # an attached ACE 1500: the Hub's AC charge path
+
     def automation_value(self, watts: int) -> Any:
         return max(0, watts)
+
+    def mqtt_power(self, watts: int) -> None:
+        # the Hub has no AC input: charging goes to the ACE, discharge stays on the Hub
+        if watts < 0 and self.ace is not None:
+            self.ace.mqtt_power(watts)
+        else:
+            super().mqtt_power(watts)
+
+    def mqtt_power_off(self) -> None:
+        if self.ace is not None:
+            self.ace.mqtt_power_off()
+        super().mqtt_power_off()
 
 
 class ZendureHyper(ZendureSolarFlow):

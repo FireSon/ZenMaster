@@ -384,6 +384,10 @@ async def fit_house(hass, power_id: str, temp_id: str, solar_ids: list, lat: flo
     kw = lambda i, ph: {floor_hour(r["start"]): abs(r["mean"]) * watt_factor(hass.states.get(i), ph) / 1000.0 for r in stats.get(i, []) if r.get("mean") is not None}
     p, t, solar = kw(power_id, phase), {floor_hour(r["start"]): r["mean"] for r in stats.get(temp_id, []) if r.get("mean") is not None}, [kw(i, Phase.all) for i in solar_ids]
     standby = float(np.median([v for v in p.values() if v < 0.1] or [0.0]))
+    # the sun on the meter with the longest history, scaled by what the other meters add in the hours they all report
+    roof = min(solar, key=lambda s: min(s, default=now)) if solar else {}
+    both = set.intersection(*(set(s) for s in solar)) if solar else set()
+    scale = sum(sum(s[k] for s in solar) for k in both) / r if both and (r := sum(roof[k] for k in both)) else 1.0
 
     # outdoor temperature, global irradiance and wind of the same hours from the weather archive; a failed fetch keeps the current fit
     params = {"latitude": lat, "longitude": lon, "start_date": begin.date().isoformat(), "end_date": now.date().isoformat(), "hourly": "temperature_2m,shortwave_radiation,wind_speed_10m", "wind_speed_unit": "ms", "timezone": "UTC"}
@@ -399,7 +403,7 @@ async def fit_house(hass, power_id: str, temp_id: str, solar_ids: list, lat: flo
     days = defaultdict(list)
     useful = lambda e: e - (1 - _KNEE_COP) * max(0.0, e - _KNEE)  # the power that gives heat at the full COP: above the knee only part of it, as in the plan
     for k in sorted(set(p) & set(t) & set(wx)):
-        days[k.date()].append((_cop(wx[k][0], t[k]) * useful(max(0.0, p[k] - standby)), wx[k][0], t[k] - wx[k][0], wx[k][2], sum(s.get(k, 0.0) for s in solar) if solar else wx[k][1], wx[k][1], t[k]))
+        days[k.date()].append((_cop(wx[k][0], t[k]) * useful(max(0.0, p[k] - standby)), wx[k][0], t[k] - wx[k][0], wx[k][2], roof.get(k, 0.0) * scale if solar else wx[k][1], wx[k][1], t[k]))
     # the room change over the whole 24 hours: from the first hour of the day to the first hour of the next
     end = lambda d: datetime(d.year, d.month, d.day, tzinfo=timezone.utc) + timedelta(days=1)
     full = [(d, v) for d, v in days.items() if len(v) == 24 and end(d) in t]
