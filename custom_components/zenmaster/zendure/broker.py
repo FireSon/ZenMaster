@@ -153,8 +153,12 @@ class ZendureBroker:
             case 1:  # CONNECT: protocol name, level, flags, keepalive, client id
                 at = 2 + struct.unpack_from(">H", body)[0] + 4
                 conn.client_id = body[at + 2:at + 2 + struct.unpack_from(">H", body, at)[0]].decode("utf-8", "replace")
-                conn.writer.write(packet(0x20, b"\0\0"))
                 cipher = conn.writer.get_extra_info("cipher")
+                # the firmware connects with its deviceId as the client id: when this address is admitted for known ids, the client id must be one of them
+                if conn.keys and conn.client_id and conn.client_id not in conn.keys:
+                    _LOGGER.warning("Zendure broker: %s connected as %s, not an admitted device id, closed", conn.ip, conn.client_id)
+                    return False
+                conn.writer.write(packet(0x20, b"\0\0"))
                 _LOGGER.info("Zendure broker: %s connected as %s, %s", conn.ip, conn.client_id, cipher[0] if cipher else "?")
             case 3:  # PUBLISH, QoS 0 to 2
                 at = 2 + struct.unpack_from(">H", body)[0]
