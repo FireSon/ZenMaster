@@ -90,9 +90,24 @@ async def test_stranger_is_closed_before_tls_and_pairing_opens_the_door() -> Non
         with pytest.raises((ssl.SSLError, ConnectionError, OSError)):
             await connect(port)
         broker.pair("Cd3wbW9V")
+        # the firmware connects with its deviceId as the client id; a paired device gets in
         reader, writer = await connect(port)
-        writer.write(packet(0x10, text("MQTT") + b"\x04\x02\x00\x1e" + text("x")))
+        writer.write(packet(0x10, text("MQTT") + b"\x04\x02\x00\x1e" + text("Cd3wbW9V")))
         assert await read(reader) == (0x20, b"\0\0")
+        writer.close()
+    finally:
+        broker.close()
+
+
+async def test_wrong_client_id_on_an_admitted_address_is_closed() -> None:
+    device = SimpleNamespace(ip="127.0.0.1", device_key="Cd3wbW9V", prodkey="65174u", connection=0, mqtt=None)
+    broker, port = await start(make_driver({"HED4NENBN470562": device}))
+    try:
+        reader, writer = await connect(port)
+        # the address is admitted for Cd3wbW9V, but a connection claiming another id is refused, no CONNACK
+        writer.write(packet(0x10, text("MQTT") + b"\x04\x02\x00\x1e" + text("someoneelse")))
+        with pytest.raises((asyncio.IncompleteReadError, ConnectionError, OSError)):
+            await read(reader)
         writer.close()
     finally:
         broker.close()

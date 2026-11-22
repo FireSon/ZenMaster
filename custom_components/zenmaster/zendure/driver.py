@@ -470,3 +470,5 @@ class ZendureDriver(Driver):
         token = (payload.get("params") or {}).get("token")
         reply = {"token": token, "result": 0, "params": {"result": 0, "token": token, "apiUrl": self.api_url, "userId": USER_ID}}
         client.publish(f"iot{msg_topic}/replay", json.dumps(reply))  # no retain: a retained replay reboot-loops the device
+        # register re-enables the aliyun log upload (decompile FUN_420169f4(1)); switch it off again. zenSDK 3 reboots ~2 s later and time-sync covers it, zenSDK 2 does not reboot and needs this
+        client.publish(f"iot{msg_topic.rsplit('/', 1)[0]}/dev/debug", json.dumps({"enable_log": False}))
