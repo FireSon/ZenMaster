@@ -50,6 +50,8 @@ def test_register_reply_carries_the_api_address_and_discovers() -> None:
     assert reply["result"] == 0 and reply["token"] == "tok"
     assert reply["params"] == {"result": 0, "token": "tok", "apiUrl": driver.api_url, "userId": 38555}
     assert found[0]["sn"] == "HED4NENBN470562" and found[0]["product"] == "solarflow1600ac+"
+    # register re-enables the aliyun log upload in the firmware, so the reply is followed by enable_log:false
+    assert client.sent[1] == ("iot/65174u/Cd3wbW9V/dev/debug", {"enable_log": False})
 
 
 def test_api_answers_only_known_devices() -> None:
