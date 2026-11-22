@@ -10,5 +10,5 @@ highspy>=1.16.0
 numpy
 aiosqlite>=0.22.1
 tzdata>=2026.6
-pvlib>=0.15.0
+pvlib>=0.16.1
 pynordpool==0.4.0
