@@ -12,7 +12,8 @@ from custom_components.zenmaster.device import DeviceState
 from custom_components.zenmaster.sensor import HaSensor
 from custom_components.zenmaster.zendure.device import Command, ConnectionType
 from custom_components.zenmaster.zendure.solarflow import ZendureHyper, ZendureSolarFlow, _limits
-from custom_components.zenmaster.distribution import DistributionMode
+from custom_components.zenmaster.zendure.driver import ZendureDriver
+from custom_components.zenmaster.distribution import Distribution, DistributionMode
 
 for cls in (HaSensor, HaNumber, HaBinarySensor):
     cls.add = staticmethod(lambda *a, **k: None)  # no HA platform in tests
@@ -275,6 +276,58 @@ def test_a_silent_streaming_device_goes_offline_within_a_minute(monkeypatch) -> 
         assert broker.state == DeviceState.ACTIVE
         ble.unload()
         broker.unload()
+
+    asyncio.run(scenario())
+
+
+def make_broker_device(esp: int) -> ZendureSolarFlow:
+    # a device with a driver that runs its own broker, so _to_own_broker has something to point at
+    hass = fake_hass()
+    driver = ZendureDriver(hass, "entry", [], Distribution(hass, "entry"))
+    driver.broker_host = "192.168.1.250"
+    driver.broker.server = object()  # the own broker is running
+    d = ZendureSolarFlow(hass, driver, None, "SF2400_D9", {"prodkey": "gDa3tb", "device_id": "simdev", "sn": "AB3CD9"}, "SF2400 AC", 2400, -2400)
+    for e in d.entities.values():
+        e.hass = None
+    d.ip = "1.2.3.4"
+    d.esp_version = esp
+    d.mqtt = None
+    return d
+
+
+def test_zensdk3_device_is_moved_to_the_own_broker_once() -> None:
+    async def scenario() -> None:
+        d = make_broker_device(0x3015)
+        session = FakeSession({})
+        await d._to_own_broker(session)
+        assert session.posts == [("http://1.2.3.4/rpc", json.dumps({"id": 1, "src": "em", "method": "Mqtt.SetConfig", "sn": "AB3CD9", "params": {"config": {"server": "192.168.1.250"}}}))]
+        # it reboots the device, so it is not sent again
+        await d._to_own_broker(session)
+        assert len(session.posts) == 1
+        d.unload()
+
+    asyncio.run(scenario())
+
+
+def test_move_to_own_broker_is_skipped_when_not_applicable() -> None:
+    async def scenario() -> None:
+        # zenSDK 2 has no Mqtt.SetConfig
+        d = make_broker_device(0)
+        session = FakeSession({})
+        await d._to_own_broker(session)
+        assert session.posts == []
+        # already on the own broker
+        d2 = make_broker_device(0x3015)
+        d2.mqtt = FakeMqtt()
+        await d2._to_own_broker(session)
+        assert session.posts == []
+        # no own broker running
+        d3 = make_broker_device(0x3015)
+        d3.driver.broker.server = None
+        await d3._to_own_broker(session)
+        assert session.posts == []
+        for d in (d, d2, d3):
+            d.unload()
 
     asyncio.run(scenario())
 
