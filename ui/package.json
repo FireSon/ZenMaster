@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.68.2",
-    "echarts": "^5.5.0",
+    "echarts": "^6.1.0",
     "lit": "^3.2.0"
   },
   "devDependencies": {
