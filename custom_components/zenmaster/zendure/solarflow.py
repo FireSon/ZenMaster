@@ -78,6 +78,7 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
         self.charge_max_power: int = abs(pwr_min)
         self.entities["charge_max_power"].update_value(self.charge_max_power)
         self._msg_update = 0.0
+        self._own_broker_set = False  # a zenSDK 3 device reachable over HTTP is moved to the own broker once per run
         self.mqtt: mqtt.Client | None = None
         self.batteries: dict[str, ZendureBattery] = {}
         self.battery_names: dict[str, str] = dict(data.get("batteries", {}))  # pack serial -> name, fixed at first sight like the device name
@@ -388,12 +389,25 @@ class ZendureSolarFlow(ZendureDevice, DistributionDevice):
                 payload = json.loads(await response.text())
             self.update_properties(payload, time.time())
             self.connection = ConnectionType.ZENSDK
+            await self._to_own_broker(session)
 
         except Exception:
             # no answer while on zenSDK: offline, so the next round recovers it over HTTP, BLE or the broker
             if self.connection == ConnectionType.ZENSDK:
                 _LOGGER.warning("ZENSDK failed for %s", self.device_id)
                 self.connection = ConnectionType.OFFLINE
+
+    async def _to_own_broker(self, session: Any) -> None:
+        # ZenMaster runs the broker and this zenSDK 3 device is reachable over HTTP but not on it: point it here. Mqtt.SetConfig reboots the device, so once per run
+        if self._own_broker_set or self.mqtt is not None or self.esp_version < 0x3000 or self.driver is None or self.driver.broker.server is None:
+            return
+        self._own_broker_set = True
+        body = json.dumps({"id": 1, "src": "em", "method": "Mqtt.SetConfig", "sn": self.sn, "params": {"config": {"server": self.driver.broker_host}}})
+        try:
+            async with session.post(f"http://{self.ip}/rpc", data=body, headers=HTTP_HEADER, timeout=HTTP_TIMEOUT) as response:
+                _LOGGER.info("Zendure %s: moved to the own broker %s (HTTP %s)", self.device_id, self.driver.broker_host, response.status)
+        except Exception as err:
+            _LOGGER.warning("Zendure %s: move to the own broker failed: %s", self.device_id, err)
 
     async def cmd_ble(self, payload: Any) -> None:
         if not await self._ble_connect():
