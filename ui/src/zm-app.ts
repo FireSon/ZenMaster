@@ -6,7 +6,7 @@ import { api } from './service/api.js';
 import { loadTranslations, t } from './service/i18n.js';
 import { STATIC_URL } from './service/ha.js';
 import { sliceLive, refetchLive } from './service/loader.js';
-import { PANEL_COLORS, chartData, headStats, summaryLines, type HeadStats } from './derive.js';
+import { PANEL_COLORS, chartData, headStats, summaryView, type HeadStats } from './derive.js';
 import { byKind } from './service/drivers.js';
 import './components/zm-overview.js';
 import './components/zm-cijfers.js';
@@ -174,8 +174,22 @@ export class ZmApp extends LitElement {
       .zpop .zr b { font-weight: 600; }
       .zpop .zr small { font-size: var(--zm-fs-s); color: var(--zm-text-dim); }
       /* the summary of the plan on the saving tile: wider, kept inside the window on the right */
-      .zpop.sum { width: 360px; max-width: calc(100vw - 32px); left: auto; right: 0; transform: none; }
-      .zpop .zl { margin-top: 6px; font-family: var(--zm-font-body); font-size: var(--zm-fs-s); line-height: 1.4; color: var(--zm-text); }
+      .zpop.sum { width: 380px; max-width: calc(100vw - 32px); left: auto; right: 0; transform: none; padding: 12px 14px; font-family: var(--zm-font-body); font-size: var(--zm-fs-s); color: var(--zm-text); }
+      .sum .big { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .sum .big div { background: var(--zm-card-2); border-radius: 10px; padding: 7px 10px; }
+      .sum .big small { display: block; color: var(--zm-text-dim); }
+      .sum .big b { font-family: var(--zm-font-display); font-size: var(--zm-fs-l); font-weight: 600; color: #1fb89a; }
+      .sum .sh { display: flex; align-items: center; gap: 6px; margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--zm-border); font-family: var(--zm-font-display); font-size: var(--zm-fs-m); font-weight: 600; }
+      .sum .sh svg { flex: none; color: #1fb89a; }
+      .sum .sr { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+      .sum .sr span { color: var(--zm-text-dim); }
+      .sum .sr b { font-weight: 600; white-space: nowrap; }
+      .sum .sn { padding: 2px 0; font-size: 11px; color: var(--zm-text-faint); }
+      .sum table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+      .sum td { padding: 2px 0; }
+      .sum td.l0 { color: var(--zm-text-dim); }
+      .sum td.r { text-align: right; white-space: nowrap; }
+      .sum tr.hd td { color: var(--zm-text-faint); font-size: 11px; }
       /* the tabstrip is the top of the card the tab's content sits in */
       /* the tabstrip low: little padding, text and icons a size down */
       .tabs { display: flex; gap: 5px; padding: 5px; background: linear-gradient(180deg, var(--zm-card-2), var(--zm-tabbar)); border: 1px solid var(--zm-border); border-radius: 20px 20px 0 0; }
@@ -231,6 +245,29 @@ export class ZmApp extends LitElement {
     return nothing;
   }
 
+  // the popup of the saving tile: why this plan, the saving and the plan's cost on top, then one section per part with a heading
+  private _summary(save: string) {
+    const v = summaryView(this._plan?.explain?.summary, this._config);
+    if (!v) return nothing;
+    const ico = (body: unknown) => html`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+    const ICONS: Record<string, unknown> = {
+      battery: svg`<rect x="3" y="7" width="16" height="10" rx="2"></rect><path d="M21 11v2M7 10v4M11 10v4"></path>`,
+      packs: svg`<rect x="3" y="7" width="16" height="10" rx="2"></rect><path d="M21 11v2M8 12h6"></path>`,
+      limits: svg`<rect x="3" y="9" width="18" height="6" rx="1"></rect><path d="M7 9l-2 6M12 9l-2 6M17 9l-2 6M6 15v4M18 15v4"></path>`,
+      heating: svg`<path d="M12 3c1 3 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3 0-5.5 1-8.5z"></path>`,
+      consumers: svg`<path d="M9 7.5V3M15 7.5V3"></path><path d="M6 7.5h12v3.5a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path>`,
+    };
+    const cell = (c: string, j: number, align: string) => html`<td class="${align[j] === 'r' ? 'r' : ''} ${j === 0 ? 'l0' : ''}">${c}</td>`;
+    return html`<div class="zpop sum"><div class="zh">${t('ui.summary.title', 'Waarom dit plan')}</div>
+      <div class="big"><div><small>${t('ui.summary.saving', 'Besparing vandaag')}</small><b>€ ${save}</b></div>${v.cost ? html`<div><small>${v.cost[0]}</small><b>${v.cost[1]}</b></div>` : nothing}</div>
+      ${v.sections.map((sec) => html`<div class="sh">${ico(ICONS[sec.key])}${sec.title}</div>
+        ${sec.rows.map(([l, r]) => html`<div class="sr"><span>${l}</span><b>${r}</b></div>`)}
+        ${sec.note && sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}
+        ${sec.table ? html`<table>${sec.table.head ? html`<tr class="hd">${sec.table.head.map((c, j) => cell(c, j, sec.table!.align))}</tr>` : nothing}${sec.table.rows.map((row) => html`<tr>${row.map((c, j) => cell(c, j, sec.table!.align))}</tr>`)}</table>` : nothing}
+        ${sec.note && !sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}`)}
+    </div>`;
+  }
+
   // the header tiles: the meter with its phases, the fleet, solar with a hint per group, the saving and the consumers
   private _kpis(s: HeadStats) {
     const icon = (body: unknown) => html`<span class="i"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${body}</svg></span>`;
@@ -259,9 +296,7 @@ export class ZmApp extends LitElement {
           <div class="h">${icon(svg`<circle cx="12" cy="12" r="8.5"></circle><path d="M15 9.2a3.6 3.6 0 1 0 0 5.6M7.5 11h5M7.5 13h5"></path>`)}${t('ui.app.savings', 'Besparing')}<span class="s">${t('ui.app.today', 'vandaag')}</span></div>
           <div class="v">€${s.save}</div>
         </div>
-        ${(lines => lines.length ? html`<div class="zpop sum"><div class="zh">${t('ui.summary.title', 'Waarom dit plan')}</div>
-          <div class="zl">${t('ui.summary.saving', 'Verwachte besparing vandaag: € {eur}', { eur: s.save })}</div>
-          ${lines.map((l) => html`<div class="zl">${l}</div>`)}</div>` : nothing)(summaryLines(this._plan?.explain?.summary, this._config))}
+        ${this._summary(s.save)}
       </div>
       <div class="kpi" style="--c:#f47a20;--t:var(--zm-orange-soft)">
         <div class="h">${icon(svg`<path d="M9 7.5V3M15 7.5V3"></path><path d="M6 7.5h12v3.5a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path>`)}${t('ui.app.consumers', 'Verbruikers')}<span class="s">${t('ui.app.now', 'nu')}</span></div>
