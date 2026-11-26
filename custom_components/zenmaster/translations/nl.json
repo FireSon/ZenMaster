@@ -1105,7 +1105,13 @@
         "sec_heating": "Verwarming · {name}",
         "heat": "Stookt",
         "avg": "Gemiddelde prijs plan",
-        "sec_consumers": "Verbruikers"
+        "sec_consumers": "Verbruikers",
+        "objective": "Goedkoopste plan: inkoop − verkoop + slijtage + comfortboete − restwaarde accu's",
+        "why_charge": "stroom {price}, met verlies {bound} ≤ {value} waarde in de accu",
+        "why_discharge": "stroom {price} − slijtage = {bound} ≥ {value} waarde in de accu",
+        "alt_even": "even goed alternatief: {at}",
+        "alt_next_charge": "volgend beste: {at}, {eur} duurder",
+        "alt_next_discharge": "volgend beste: {at}, {eur} minder opbrengst"
       }
     }
   }

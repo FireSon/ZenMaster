@@ -95,7 +95,7 @@ export function explainDevice(x: ExplainIndex | undefined, i: number, id: string
 }
 
 // the summary of the whole plan as sections with a heading: rows of label and value, a note, and a table with one alignment letter per column
-export interface SummarySection { key: string; title: string; rows: Array<[string, string]>; note?: string; table?: { align: string; head?: string[]; rows: string[][] } }
+export interface SummarySection { key: string; title: string; rows: Array<[string, string, string[]?]>; note?: string; table?: { align: string; head?: string[]; rows: string[][] } }
 export interface SummaryView { cost: [string, string] | null; sections: SummarySection[] }
 const LIMIT: Record<string, string> = {
   phase: 'Fase {name} vol', inverter: 'Omvormer {name} op max', own_solar: 'Eigen panelen {name} vol benut', max_output: "Maximale levering accu's",
@@ -121,9 +121,14 @@ export function summaryView(summary: Explain['summary'], config: any): SummaryVi
   const b = of('battery')[0];
   if (b) {
     const way = (w: string) => t(`ui.summary.${w}`, w === 'charge' ? 'Laden' : 'Ontladen');
-    const windows = of('battery_window').map((w, i, all) => [i && all[i - 1].way === w.way ? '' : way(w.way), `${at(w.start)}-${hhmm(w.end)}`, `${nl(w.kwh, 1)} kWh`]);
-    sections.push({ key: 'battery', title: t('ui.summary.sec_battery', "Accu's"), rows: [[way('charge'), `${nl(b.charge_kwh, 1)} kWh · ${kwh(b.charge_price)}`], [way('discharge'), `${nl(b.discharge_kwh, 1)} kWh · ${kwh(b.discharge_price)}`], [t('ui.summary.spread', 'Verschil'), kwh(b.discharge_price - b.charge_price)]],
-      note: t('ui.summary.battery_note', 'tegen {loss}% verlies en {wear} slijtage', { loss: Math.round(b.loss * 100), wear: kwh(b.wear) }), table: windows.length ? { align: 'llr', rows: windows } : undefined });
+    // per window why: its price after loss or wear against the value of a stored kWh, and the next best quarter
+    const why = (w: any): string[] => [
+      ...(w.value != null ? [t(`ui.summary.why_${w.way}`, w.way === 'charge' ? 'stroom {price}, met verlies {bound} ≤ {value} waarde in de accu' : 'stroom {price} − slijtage = {bound} ≥ {value} waarde in de accu', { price: money(w.price), bound: money(w.bound), value: money(w.value) })] : []),
+      ...(w.alt_at != null ? [w.even ? t('ui.summary.alt_even', 'even goed alternatief: {at}', { at: at(w.alt_at) }) : t(`ui.summary.alt_next_${w.way}`, w.way === 'charge' ? 'volgend beste: {at}, {eur} duurder' : 'volgend beste: {at}, {eur} minder opbrengst', { at: at(w.alt_at), eur: kwh(w.alt_eur) })] : []),
+    ];
+    const windows = of('battery_window').map((w): [string, string, string[]] => [`${way(w.way)} ${at(w.start)}-${hhmm(w.end)}`, `${nl(w.kwh, 1)} kWh`, why(w)]);
+    sections.push({ key: 'battery', title: t('ui.summary.sec_battery', "Accu's"), rows: [[way('charge'), `${nl(b.charge_kwh, 1)} kWh · ${kwh(b.charge_price)}`], [way('discharge'), `${nl(b.discharge_kwh, 1)} kWh · ${kwh(b.discharge_price)}`],
+      [t('ui.summary.spread', 'Verschil'), kwh(b.discharge_price - b.charge_price), [t('ui.summary.battery_note', 'tegen {loss}% verlies en {wear} slijtage', { loss: Math.round(b.loss * 100), wear: kwh(b.wear) })]], ...windows] });
   }
 
   // per pack whether it runs full or empty, in one row

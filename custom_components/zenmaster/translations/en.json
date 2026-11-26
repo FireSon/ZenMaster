@@ -1105,7 +1105,13 @@
         "sec_heating": "Heating · {name}",
         "heat": "Heats",
         "avg": "Average price of the plan",
-        "sec_consumers": "Consumers"
+        "sec_consumers": "Consumers",
+        "objective": "Cheapest plan: buy − sell + wear + comfort penalty − residual value of the batteries",
+        "why_charge": "power {price}, after loss {bound} ≤ {value} value in the battery",
+        "why_discharge": "power {price} − wear = {bound} ≥ {value} value in the battery",
+        "alt_even": "equally good alternative: {at}",
+        "alt_next_charge": "next best: {at}, {eur} dearer",
+        "alt_next_discharge": "next best: {at}, {eur} less revenue"
       }
     }
   }

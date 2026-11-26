@@ -20,6 +20,7 @@ Bound = float | Callable[[int], float]  # a bound or coefficient: fixed number o
 _STORE = "zenmaster_calibration"  # one shared .storage file holding every entry's persisted params
 
 LIMIT_EUR = 0.05  # a limit enters the summary from this shadow price on, per kWh or per degC (Jan, 2026-11-26)
+ALT_EVEN_EUR = 0.01  # a next best quarter closer than this per kWh is called equally good (Jan, 2026-11-26)
 _NO_LIMIT = ("balance", "soc", "heat_balance", "mass")  # always priced: the energy price, the stored value and the heat balances are no limit
 
 
@@ -370,6 +371,15 @@ class LpSolver:
         summary = self.summary + [{"code": "limit", "v": {"limit": c, "id": i, "quarters": q, "max": m, "uom": u}} for (c, i), (q, m, u) in sorted(limits.items(), key=lambda x: -x[1][1])]
         summary += [{"code": "consumer", "v": {"series": sid, "reason": rs[0]}} for sid, rs in self.reasons.items() if rs]
         return {"binding": binding, "reduced": reduced, "reasons": self.reasons, "summary": summary}
+
+    def label_duals(self, code: str, id: str) -> np.ndarray:
+        # per quarter the shadow price of the rows with this label, scaled to its unit; zero where there is none
+        out = np.zeros(self.horizon)
+        if self.duals is not None:
+            for label, d in zip(self._labels, self.duals[0]):
+                if label is not None and label[0][0] == code and label[0][1] == id:
+                    out[label[1]] = abs(d) * (label[0][2]() if callable(label[0][2]) else label[0][2])
+        return out
 
     def history(self) -> dict:
         # every series whole, history and plan, with the quarter of the last run

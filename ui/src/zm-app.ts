@@ -185,6 +185,7 @@ export class ZmApp extends LitElement {
       .sum .sr span { color: var(--zm-text-dim); }
       .sum .sr b { font-weight: 600; white-space: nowrap; }
       .sum .sn { padding: 2px 0; font-size: 11px; color: var(--zm-text-faint); }
+      .sum .sn.obj { margin: -2px 0 8px; }
       .sum table { width: 100%; border-collapse: collapse; margin-top: 4px; }
       .sum td { padding: 2px 0; }
       .sum td.l0 { color: var(--zm-text-dim); }
@@ -263,9 +264,10 @@ export class ZmApp extends LitElement {
     };
     const cell = (c: string, j: number, align: string) => html`<td class="${align[j] === 'r' ? 'r' : ''} ${j === 0 ? 'l0' : ''}">${c}</td>`;
     return html`<div class="zpop sum"><div class="zh">${t('ui.summary.title', 'Waarom dit plan')}</div>
+      <div class="sn obj">${t('ui.summary.objective', "Goedkoopste plan: inkoop − verkoop + slijtage + comfortboete − restwaarde accu's")}</div>
       <div class="big"><div><small>${t('ui.summary.saving', 'Besparing vandaag')}</small><b>€ ${save}</b></div>${v.cost ? html`<div><small>${v.cost[0]}</small><b>${v.cost[1]}</b></div>` : nothing}</div>
       <div class="cols">${v.sections.map((sec) => html`<div class="sec"><div class="sh">${ico(ICONS[sec.key])}${sec.title}</div>
-        ${sec.rows.map(([l, r]) => html`<div class="sr"><span>${l}</span><b>${r}</b></div>`)}
+        ${sec.rows.map(([l, r, sub]) => html`<div class="sr"><span>${l}</span><b>${r}</b></div>${(sub ?? []).map((x) => html`<div class="sn">${x}</div>`)}`)}
         ${sec.note && sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}
         ${sec.table ? html`<table>${sec.table.head ? html`<tr class="hd">${sec.table.head.map((c, j) => cell(c, j, sec.table!.align))}</tr>` : nothing}${sec.table.rows.map((row) => html`<tr>${row.map((c, j) => cell(c, j, sec.table!.align))}</tr>`)}</table>` : nothing}
         ${sec.note && !sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}</div>`)}</div>
