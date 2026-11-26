@@ -174,7 +174,7 @@ export class ZmApp extends LitElement {
       .zpop .zr b { font-weight: 600; }
       .zpop .zr small { font-size: var(--zm-fs-s); color: var(--zm-text-dim); }
       /* the summary of the plan on the saving tile: wider, kept inside the window on the right */
-      .zpop.sum { width: 380px; max-width: calc(100vw - 32px); left: auto; right: 0; transform: none; padding: 12px 14px; font-family: var(--zm-font-body); font-size: var(--zm-fs-s); color: var(--zm-text); }
+      .zpop.sum { width: 760px; max-width: calc(100vw - 32px); left: auto; right: 0; transform: none; padding: 12px 14px; font-family: var(--zm-font-body); font-size: var(--zm-fs-s); color: var(--zm-text); }
       .sum .big { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
       .sum .big div { background: var(--zm-card-2); border-radius: 10px; padding: 7px 10px; }
       .sum .big small { display: block; color: var(--zm-text-dim); }
@@ -190,6 +190,10 @@ export class ZmApp extends LitElement {
       .sum td.l0 { color: var(--zm-text-dim); }
       .sum td.r { text-align: right; white-space: nowrap; }
       .sum tr.hd td { color: var(--zm-text-faint); font-size: 11px; }
+      /* the sections in two columns the browser balances, a section never split; one column on a narrow screen */
+      .sum .cols { columns: 2; column-gap: 22px; }
+      .sum .sec { break-inside: avoid; }
+      @media (max-width: 820px) { .sum .cols { columns: 1; } }
       /* the tabstrip is the top of the card the tab's content sits in */
       /* the tabstrip low: little padding, text and icons a size down */
       .tabs { display: flex; gap: 5px; padding: 5px; background: linear-gradient(180deg, var(--zm-card-2), var(--zm-tabbar)); border: 1px solid var(--zm-border); border-radius: 20px 20px 0 0; }
@@ -260,11 +264,11 @@ export class ZmApp extends LitElement {
     const cell = (c: string, j: number, align: string) => html`<td class="${align[j] === 'r' ? 'r' : ''} ${j === 0 ? 'l0' : ''}">${c}</td>`;
     return html`<div class="zpop sum"><div class="zh">${t('ui.summary.title', 'Waarom dit plan')}</div>
       <div class="big"><div><small>${t('ui.summary.saving', 'Besparing vandaag')}</small><b>€ ${save}</b></div>${v.cost ? html`<div><small>${v.cost[0]}</small><b>${v.cost[1]}</b></div>` : nothing}</div>
-      ${v.sections.map((sec) => html`<div class="sh">${ico(ICONS[sec.key])}${sec.title}</div>
+      <div class="cols">${v.sections.map((sec) => html`<div class="sec"><div class="sh">${ico(ICONS[sec.key])}${sec.title}</div>
         ${sec.rows.map(([l, r]) => html`<div class="sr"><span>${l}</span><b>${r}</b></div>`)}
         ${sec.note && sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}
         ${sec.table ? html`<table>${sec.table.head ? html`<tr class="hd">${sec.table.head.map((c, j) => cell(c, j, sec.table!.align))}</tr>` : nothing}${sec.table.rows.map((row) => html`<tr>${row.map((c, j) => cell(c, j, sec.table!.align))}</tr>`)}</table>` : nothing}
-        ${sec.note && !sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}`)}
+        ${sec.note && !sec.rows.length ? html`<div class="sn">${sec.note}</div>` : nothing}</div>`)}</div>
     </div>`;
   }
 
