@@ -192,6 +192,9 @@ class Heating(SolverEntry, ConsumerDevice):
             p = self.power.dest.data
             end = 12 + lp.horizon
             p[12:end] = np.round(p[12:end] / 0.1) * 0.1  # snap the plan to 0.1 kW steps for display
+            # for the summary: the heat it buys, at which price against the average buy price of the horizon
+            buy, kwh = lp.price_buy.data[12:end] if lp.price_buy is not None else np.zeros(lp.horizon), float(p[12:end].sum() * 0.25)
+            lp.summary.append({"code": "heating", "v": {"id": self.id, "name": self.name, "kwh": round(kwh, 1), "price": round(float((p[12:end] * buy).sum() * 0.25 / kwh), 4) if kwh else 0.0, "avg_price": round(float(buy.mean()), 4)}})
 
     async def restore(self, hass) -> None:
         d = await self.load_params(hass)

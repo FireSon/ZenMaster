@@ -1076,6 +1076,27 @@
         "reduced_charge_max": "Charging at maximum: more would bring {v}",
         "reduced_discharge_up": "Discharging brings {v} less than it costs",
         "reduced_discharge_max": "Discharging at maximum: more would bring {v}"
+      },
+      "summary": {
+        "title": "Why this plan",
+        "saving": "Expected saving today: € {eur}",
+        "revenue": "The plan earns € {eur} over {hours} hours",
+        "cost": "The plan costs € {eur} over {hours} hours",
+        "battery": "Batteries charge {charge} kWh at {cprice} and discharge {discharge} kWh at {dprice}: a spread of {spread}, against {loss}% loss and {wear} wear",
+        "window_charge": "Charging {from} to {to}: {kwh} kWh",
+        "window_discharge": "Discharging {from} to {to}: {kwh} kWh",
+        "battery_full": "Battery {name} full for {n} quarters: one kWh more storage would bring {max}",
+        "battery_empty": "Battery {name} empty for {n} quarters: one kWh more would bring {max}",
+        "limit": "{what}: {n} quarters, up to {max}",
+        "limit_phase": "Phase {name} full",
+        "limit_inverter": "Inverter {name} at its maximum",
+        "limit_own_solar": "Own panels of {name} fully used",
+        "limit_max_output": "Battery delivery cap reached",
+        "limit_comfort_ceiling": "{name} at the ceiling",
+        "limit_comfort_target": "{name} below the target temperature",
+        "limit_knee": "{name} above the knee",
+        "heating": "{name} heats {kwh} kWh at an average {price}, against an average {avg} over the plan",
+        "floor": "{n} quarters at the comfort floor, up to {max}"
       }
     }
   }

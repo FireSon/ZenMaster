@@ -1076,6 +1076,27 @@
         "reduced_charge_max": "Laadt op maximum: meer zou {v} opleveren",
         "reduced_discharge_up": "Ontladen levert {v} minder op dan het kost",
         "reduced_discharge_max": "Ontlaadt op maximum: meer zou {v} opleveren"
+      },
+      "summary": {
+        "title": "Waarom dit plan",
+        "saving": "Verwachte besparing vandaag: € {eur}",
+        "revenue": "Het plan levert € {eur} op over {hours} uur",
+        "cost": "Het plan kost € {eur} over {hours} uur",
+        "battery": "Accu's laden {charge} kWh voor {cprice} en ontladen {discharge} kWh voor {dprice}: verschil {spread}, tegen {loss}% verlies en {wear} slijtage",
+        "window_charge": "Laden {from} tot {to}: {kwh} kWh",
+        "window_discharge": "Ontladen {from} tot {to}: {kwh} kWh",
+        "battery_full": "Accu {name} {n} kwartieren vol: een kWh meer opslag zou {max} opleveren",
+        "battery_empty": "Accu {name} {n} kwartieren leeg: een kWh meer zou {max} opleveren",
+        "limit": "{what}: {n} kwartieren, tot {max}",
+        "limit_phase": "Fase {name} vol",
+        "limit_inverter": "Omvormer {name} op maximum",
+        "limit_own_solar": "Eigen panelen {name} volledig benut",
+        "limit_max_output": "Maximale levering accu's bereikt",
+        "limit_comfort_ceiling": "{name} op de bovengrens",
+        "limit_comfort_target": "{name} onder de doeltemperatuur",
+        "limit_knee": "{name} boven de knik",
+        "heating": "{name} stookt {kwh} kWh voor gemiddeld {price}, tegen gemiddeld {avg} over het plan",
+        "floor": "{n} kwartieren op de comfort-ondergrens, tot {max}"
       }
     }
   }

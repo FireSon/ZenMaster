@@ -94,6 +94,36 @@ export function explainDevice(x: ExplainIndex | undefined, i: number, id: string
   return out;
 }
 
+// the summary of the whole plan as lines of text, in a fixed order of its parts; names come from the config
+const PART = ['cost', 'battery', 'battery_window', 'battery_full', 'battery_empty', 'limit', 'heating', 'consumer'];
+const LIMIT: Record<string, string> = {
+  phase: 'Fase {name} vol', inverter: 'Omvormer {name} op maximum', own_solar: 'Eigen panelen {name} volledig benut', max_output: "Maximale levering accu's bereikt",
+  comfort_ceiling: '{name} op de bovengrens', comfort_target: '{name} onder de doeltemperatuur', knee: '{name} boven de knik',
+};
+export function summaryLines(summary: Explain['summary'], config: any): string[] {
+  const name = (id: string) => config?.[id]?.name ?? (config?.consumers ?? []).find((c: any) => c.id === id || `${c.id}_power` === id)?.name ?? id;
+  const WD = t('ui.weekdays', 'zo,ma,di,wo,do,vr,za').split(',');
+  const at = (s: number) => `${WD[new Date(s * 1000).getDay()]} ${hhmm(s)}`;
+  const kwh = (v: number) => eur(v, 'EUR/kWh');
+  const parts = [...(summary ?? [])].sort((a, b) => PART.indexOf(a.code) - PART.indexOf(b.code));
+  // the comfort floor belongs to the heating line, not to the limits
+  const floor = (id: string) => parts.find((x) => x.code === 'limit' && x.v.limit === 'comfort_floor' && x.v.id === id)?.v;
+  const out: string[] = [];
+  for (const { code, v } of parts) {
+    if (code === 'cost') out.push(t(v.eur < 0 ? 'ui.summary.revenue' : 'ui.summary.cost', v.eur < 0 ? 'Het plan levert € {eur} op over {hours} uur' : 'Het plan kost € {eur} over {hours} uur', { eur: nl(Math.abs(v.eur), 2), hours: v.hours }));
+    else if (code === 'battery') out.push(t('ui.summary.battery', "Accu's laden {charge} kWh voor {cprice} en ontladen {discharge} kWh voor {dprice}: verschil {spread}, tegen {loss}% verlies en {wear} slijtage", { charge: nl(v.charge_kwh, 1), cprice: kwh(v.charge_price), discharge: nl(v.discharge_kwh, 1), dprice: kwh(v.discharge_price), spread: kwh(v.discharge_price - v.charge_price), loss: Math.round(v.loss * 100), wear: kwh(v.wear) }));
+    else if (code === 'battery_window') out.push(t(`ui.summary.window_${v.way}`, v.way === 'charge' ? 'Laden {from} tot {to}: {kwh} kWh' : 'Ontladen {from} tot {to}: {kwh} kWh', { from: at(v.start), to: hhmm(v.end), kwh: nl(v.kwh, 1) }));
+    else if (code === 'battery_full' || code === 'battery_empty') out.push(t(`ui.summary.${code}`, code === 'battery_full' ? 'Accu {name} {n} kwartieren vol: een kWh meer opslag zou {max} opleveren' : 'Accu {name} {n} kwartieren leeg: een kWh meer zou {max} opleveren', { name: config?.[v.id]?.name ?? v.name ?? name(v.id), n: v.quarters, max: kwh(v.max) }));
+    else if (code === 'limit' && v.limit !== 'comfort_floor') out.push(t('ui.summary.limit', '{what}: {n} kwartieren, tot {max}', { what: t(`ui.summary.limit_${v.limit}`, LIMIT[v.limit] ?? v.limit, { name: name(v.id) }), n: v.quarters, max: eur(v.max, v.uom) }));
+    else if (code === 'heating') {
+      const f = floor(v.id);
+      out.push(t('ui.summary.heating', '{name} stookt {kwh} kWh voor gemiddeld {price}, tegen gemiddeld {avg} over het plan', { name: config?.[v.id]?.name ?? v.name ?? name(v.id), kwh: nl(v.kwh, 1), price: kwh(v.price), avg: kwh(v.avg_price) }) + (f ? ' · ' + t('ui.summary.floor', '{n} kwartieren op de comfort-ondergrens, tot {max}', { n: f.quarters, max: eur(f.max, f.uom) }) : ''));
+    }
+    else if (code === 'consumer') out.push(`${name(v.series)}: ${reasonText(v.reason)}`);
+  }
+  return out;
+}
+
 // what holds for the whole house in quarter i: the price of energy, a full phase, the delivery cap of the batteries
 export function explainHouse(x: ExplainIndex | undefined, i: number): string[] {
   return (x?.e.binding ?? []).filter((b) => b.at === i && HOUSE.includes(b.code)).map((b) => t(`ui.explain.${b.code}`, BIND[b.code], { v: eur(b.value, b.uom), id: b.id }));

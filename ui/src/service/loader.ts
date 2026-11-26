@@ -72,7 +72,7 @@ function sliceExplain(start: number, end: number): Explain | undefined {
   const reasons: Explain['reasons'] = {}, reduced: Explain['reduced'] = {};
   for (const id in _explain.reasons) reasons[id] = at(_explain.reasons[id]);
   for (const id in _explain.reduced) reduced[id] = _explain.reduced[id].slice(start, end);
-  return { binding: at(_explain.binding), reduced, reasons };
+  return { binding: at(_explain.binding), reduced, reasons, summary: _explain.summary };  // the summary holds for the whole plan, it is not sliced
 }
 
 // Build a Plan for one window [start, end) by slicing the cached full series (clamped per series).

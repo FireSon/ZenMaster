@@ -19,6 +19,9 @@ Bound = float | Callable[[int], float]  # a bound or coefficient: fixed number o
 
 _STORE = "zenmaster_calibration"  # one shared .storage file holding every entry's persisted params
 
+LIMIT_EUR = 0.05  # a limit enters the summary from this shadow price on, per kWh or per degC (Jan, 2026-11-26)
+_NO_LIMIT = ("balance", "soc", "heat_balance", "mass")  # always priced: the energy price, the stored value and the heat balances are no limit
+
 
 class SolverData:
     def __init__(self, id, uom, name="", source="derived", data_size=192):
@@ -197,8 +200,9 @@ class LpSolver:
         self._last_slot: int | None = None  # quarter index of the last run, drives shift()
         self.settle = 12  # index of the quarter the measurements since the previous run belong to
         self._labels: list[tuple | None] = []  # per row: (label, quarter) for the explanation, None when unlabelled
-        self._duals: tuple[np.ndarray, np.ndarray] | None = None  # row and column duals of the last solve, None when HiGHS gave none
+        self.duals: tuple[np.ndarray, np.ndarray] | None = None  # row and column duals of the last solve, None when HiGHS gave none
         self.reasons: dict[str, list[dict]] = {}  # per series id: why a consumer outside the LP was placed where it is, filled in prerun
+        self.summary: list[dict] = []  # the plan as a whole, code and numbers per part, filled by the entries in postrun
 
     def init(self, entries):
         # one-time: build columns + rows. The structure stays fixed for the whole run; bounds are lambdas.
@@ -242,9 +246,10 @@ class LpSolver:
         for c in self._columns:
             c.init(self)
 
-        # the reasons and duals are those of this run only
+        # the reasons, duals and summary are those of this run only
         self.reasons = {}
-        self._duals = None
+        self.duals = None
+        self.summary = []
 
         # per quarter: only re-evaluate and solve; columns/rows were already built once in init()
         for entry in self._entries:
@@ -294,7 +299,7 @@ class LpSolver:
             duals = (np.asarray(sol.row_dual, float), np.asarray(sol.col_dual, float)) if sol.dual_valid else None
             return solver.getModelStatus(), np.asarray(sol.col_value, float), duals
 
-        status, x, self._duals = await asyncio.get_running_loop().run_in_executor(None, solve)
+        status, x, self.duals = await asyncio.get_running_loop().run_in_executor(None, solve)
         self._last_lp_status = 0 if status == highspy.HighsModelStatus.kOptimal else 1
         if self._last_lp_status != 0:
             _LOGGER.warning("LP solve not optimal: %s", status)
@@ -344,8 +349,8 @@ class LpSolver:
     def explain(self) -> dict:
         # why the plan is as it is: the labelled rows that bind per quarter, per kW series what a quarter costs more than it brings, and the placement reasons
         binding, reduced, h = [], {}, self.horizon
-        if self._duals is not None:
-            rows, cols = self._duals
+        if self.duals is not None:
+            rows, cols = self.duals
             # a row binds when its shadow price is not zero; scaled to money per kWh or per degree
             for label, d in zip(self._labels, rows):
                 if label is not None and (value := abs(d) * (label[0][2]() if callable(label[0][2]) else label[0][2])) > 1e-4:
@@ -356,7 +361,15 @@ class LpSolver:
                     values = np.zeros(len(col.dest.data))
                     values[12 : 12 + h] = np.round(cols[col.index : col.index + h] * 4, 4)
                     reduced[col.dest.id] = values.tolist()
-        return {"binding": binding, "reduced": reduced, "reasons": self.reasons}
+        # the summary: what the entries wrote, every limit that keeps a cheaper plan out, and per consumer outside the LP its first reason
+        limits: dict[tuple, list] = {}
+        for b in binding:
+            if b["code"] not in _NO_LIMIT and b["value"] >= LIMIT_EUR:
+                q = limits.setdefault((b["code"], b["id"]), [0, 0.0, b["uom"]])
+                q[0], q[1] = q[0] + 1, max(q[1], b["value"])
+        summary = self.summary + [{"code": "limit", "v": {"limit": c, "id": i, "quarters": q, "max": m, "uom": u}} for (c, i), (q, m, u) in sorted(limits.items(), key=lambda x: -x[1][1])]
+        summary += [{"code": "consumer", "v": {"series": sid, "reason": rs[0]}} for sid, rs in self.reasons.items() if rs]
+        return {"binding": binding, "reduced": reduced, "reasons": self.reasons, "summary": summary}
 
     def history(self) -> dict:
         # every series whole, history and plan, with the quarter of the last run

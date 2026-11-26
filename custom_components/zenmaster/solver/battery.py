@@ -11,7 +11,7 @@ from ..device import DeviceState, DistributionDevice
 from ..distribution import WEAR_BIAS, Distribution, DistributionMode
 from ..sensor import HaSensor
 from ..switch import HaSwitch
-from .solver import LpSolver, SolverEntry
+from .solver import LIMIT_EUR, LpSolver, SolverEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -239,12 +239,45 @@ class DistributionEntry(SolverEntry):
         if self.distribution.optimize:
             self.distribution.entities["mode"].update_value(DistributionMode.OFF)
 
+    def _windows(self, lp: LpSolver, flow: np.ndarray, way: str) -> list[dict]:
+        # the two largest stretches of quarters with a flow this way, by energy, with their start and end as epoch seconds
+        on = np.concatenate(([False], flow > EPS_KW, [False]))
+        edges = np.flatnonzero(np.diff(on.astype(int)))
+        spans = sorted(zip(edges[::2], edges[1::2]), key=lambda s: -flow[s[0]:s[1]].sum())[:2]
+        t0 = lp._last_slot * 900
+        return [{"code": "battery_window", "v": {"way": way, "start": t0 + 900 * int(a), "end": t0 + 900 * int(b), "kwh": round(float(flow[a:b].sum() * 0.25), 1)}} for a, b in spans]
+
+    def _summarize(self, lp: LpSolver) -> None:
+        # the plan as a whole: its cost, what the fleet buys and sells at which price against its loss and wear, its two largest windows per way, and where a pack is full or empty
+        h = lp.horizon
+        buy, sell = lp.price_buy.data[12:12 + h], lp.price_sell.data[12:12 + h]
+        cost = float((self.grid_buy.dest.data[12:12 + h] * buy - self.grid_sell.dest.data[12:12 + h] * sell).sum() * 0.25)
+        lp.summary.append({"code": "cost", "v": {"eur": round(cost, 2), "hours": h // 4}})
+        charge, discharge = self._bat_charge.dest.data[12:12 + h], self._bat_discharge.dest.data[12:12 + h]
+        if not (charge.sum() or discharge.sum()):
+            return
+        # both ways weighted by the buy price of their quarters (Jan, 2026-11-26)
+        price = lambda f: round(float((f * buy).sum() / f.sum()), 4) if f.sum() else 0.0
+        lp.summary.append({"code": "battery", "v": {"charge_kwh": round(float(charge.sum() * 0.25), 1), "charge_price": price(charge), "discharge_kwh": round(float(discharge.sum() * 0.25), 1), "discharge_price": price(discharge), "loss": round(1 - AC_IN, 2), "wear": WEAR_EUR}})
+        lp.summary += self._windows(lp, charge, "charge") + self._windows(lp, discharge, "discharge")
+        if lp.duals is None:
+            return
+        # a pack at its top or bottom: the shadow price of that bound per kWh of its window, from LIMIT_EUR on; quarter 0 is the live level, pinned
+        for u in self._units:
+            if not u.cap:
+                continue
+            soc, worth = u.soc.dest.data[12:12 + h], np.abs(lp.duals[1][u.soc.index:u.soc.index + h]) / u.cap
+            for code, at in (("battery_full", soc[1:] >= 1.0 - 1e-6), ("battery_empty", soc[1:] <= 1e-6)):
+                if (hits := worth[1:][at & (worth[1:] >= LIMIT_EUR)]).size:
+                    lp.summary.append({"code": code, "v": {"id": u.device.device_id, "name": u.device.name, "quarters": int(hits.size), "max": round(float(hits.max()), 4)}})
+
     def entry_postrun(self, lp: LpSolver) -> None:
         d = self.distribution
         # the fleet's SoC for the chart: the units weighted by the kWh of their window
         if total := sum(u.cap for u in self._units):
             h = lp.horizon
             self._bat_soc.data[12 : 12 + h] = sum(u.cap * u.soc.dest.data[12 : 12 + h] for u in self._units) / total
+        self._summarize(lp)
         # the plan's order per direction over AC; the distribution takes it over while optimize is on, from the next P1 tick
         if self._units:
             d.plan_rank = {True: self._rank(lp, lambda u: u.charge.dest.data), False: self._rank(lp, lambda u: u.discharge.dest.data + u.dc_out.dest.data)}

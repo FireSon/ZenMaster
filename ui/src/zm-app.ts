@@ -6,7 +6,7 @@ import { api } from './service/api.js';
 import { loadTranslations, t } from './service/i18n.js';
 import { STATIC_URL } from './service/ha.js';
 import { sliceLive, refetchLive } from './service/loader.js';
-import { PANEL_COLORS, chartData, headStats, type HeadStats } from './derive.js';
+import { PANEL_COLORS, chartData, headStats, summaryLines, type HeadStats } from './derive.js';
 import { byKind } from './service/drivers.js';
 import './components/zm-overview.js';
 import './components/zm-cijfers.js';
@@ -173,6 +173,9 @@ export class ZmApp extends LitElement {
       .zpop .zr span { flex: 1 1 auto; font-weight: 500; }
       .zpop .zr b { font-weight: 600; }
       .zpop .zr small { font-size: var(--zm-fs-s); color: var(--zm-text-dim); }
+      /* the summary of the plan on the saving tile: wider, kept inside the window on the right */
+      .zpop.sum { width: 360px; max-width: calc(100vw - 32px); left: auto; right: 0; transform: none; }
+      .zpop .zl { margin-top: 6px; font-family: var(--zm-font-body); font-size: var(--zm-fs-s); line-height: 1.4; color: var(--zm-text); }
       /* the tabstrip is the top of the card the tab's content sits in */
       /* the tabstrip low: little padding, text and icons a size down */
       .tabs { display: flex; gap: 5px; padding: 5px; background: linear-gradient(180deg, var(--zm-card-2), var(--zm-tabbar)); border: 1px solid var(--zm-border); border-radius: 20px 20px 0 0; }
@@ -251,9 +254,14 @@ export class ZmApp extends LitElement {
         ${s.panels.length ? html`<div class="zpop"><div class="zh">${t('ui.app.solar_groups', 'Zonnepanelen · nu')}</div>
           ${s.panels.map((p, i) => html`<div class="zr"><i style="background:${PANEL_COLORS[i % PANEL_COLORS.length]}"></i><span>${p.name}</span><b>${p.w}<small> W</small></b></div>`)}</div>` : nothing}
       </div>
-      <div class="kpi" style="--c:#1fb89a;--t:var(--zm-teal-soft)">
-        <div class="h">${icon(svg`<circle cx="12" cy="12" r="8.5"></circle><path d="M15 9.2a3.6 3.6 0 1 0 0 5.6M7.5 11h5M7.5 13h5"></path>`)}${t('ui.app.savings', 'Besparing')}<span class="s">${t('ui.app.today', 'vandaag')}</span></div>
-        <div class="v">€${s.save}</div>
+      <div class="zt" tabindex="0">
+        <div class="kpi" style="--c:#1fb89a;--t:var(--zm-teal-soft)">
+          <div class="h">${icon(svg`<circle cx="12" cy="12" r="8.5"></circle><path d="M15 9.2a3.6 3.6 0 1 0 0 5.6M7.5 11h5M7.5 13h5"></path>`)}${t('ui.app.savings', 'Besparing')}<span class="s">${t('ui.app.today', 'vandaag')}</span></div>
+          <div class="v">€${s.save}</div>
+        </div>
+        ${(lines => lines.length ? html`<div class="zpop sum"><div class="zh">${t('ui.summary.title', 'Waarom dit plan')}</div>
+          <div class="zl">${t('ui.summary.saving', 'Verwachte besparing vandaag: € {eur}', { eur: s.save })}</div>
+          ${lines.map((l) => html`<div class="zl">${l}</div>`)}</div>` : nothing)(summaryLines(this._plan?.explain?.summary, this._config))}
       </div>
       <div class="kpi" style="--c:#f47a20;--t:var(--zm-orange-soft)">
         <div class="h">${icon(svg`<path d="M9 7.5V3M15 7.5V3"></path><path d="M6 7.5h12v3.5a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path>`)}${t('ui.app.consumers', 'Verbruikers')}<span class="s">${t('ui.app.now', 'nu')}</span></div>

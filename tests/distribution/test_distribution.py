@@ -463,12 +463,12 @@ def test_manual_follows_the_plan_only_while_optimize_is_on() -> None:
 
 def _postrun(dist: Distribution, charge: list[float], discharge: list[float], price: list[float]) -> float:
     # every list is per quarter from slot 12 (now); the grid carries the whole battery flow, buy equals sell
-    pad = lambda v: [0.0] * 12 + v + [0.0] * (96 - len(v))
+    pad = lambda v: np.array([0.0] * 12 + v + [0.0] * (96 - len(v)))
     bc, bd, p = pad(charge), pad(discharge), pad(price)
     b = dist.solver_entry
     b._bat_charge, b._bat_discharge = SimpleNamespace(dest=SimpleNamespace(data=bc)), SimpleNamespace(dest=SimpleNamespace(data=bd))
     b.grid_buy, b.grid_sell = SimpleNamespace(dest=SimpleNamespace(data=bc)), SimpleNamespace(dest=SimpleNamespace(data=bd))
-    b.entry_postrun(SimpleNamespace(price_buy=SimpleNamespace(data=p), price_sell=SimpleNamespace(data=p)))
+    b.entry_postrun(SimpleNamespace(price_buy=SimpleNamespace(data=p), price_sell=SimpleNamespace(data=p), horizon=96, summary=[], duals=None, _last_slot=0))
     return dist.entities["savings_today"].state
 
 

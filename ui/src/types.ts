@@ -85,6 +85,7 @@ export interface Explain {
   binding: Array<{ at: number; code: string; id: string; uom: string; value: number }>;
   reduced: Record<string, number[]>;
   reasons: Record<string, Array<{ at: number; code: string; v: Record<string, number | string> }>>;
+  summary?: Array<{ code: string; v: Record<string, any> }>;  // the plan as a whole, one entry per part
 }
 
 export interface Plan {
