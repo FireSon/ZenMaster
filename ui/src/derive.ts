@@ -1,4 +1,4 @@
-import type { Plan, HistoryDay } from './types.js';
+import type { Plan, HistoryDay, Explain } from './types.js';
 import { t } from './service/i18n.js';
 
 // Shapes the live Plan, and the 30-day history from get_history, into the data structure the chart builders and cards expect.
@@ -28,6 +28,76 @@ export function kindOf(type: string, name: string, kind?: string): Kind {
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 export const nl = (v: number, dec: number) => v.toFixed(dec).replace('.', ',');
+
+// the explanation of a plan, its binding rows grouped per device and quarter once, so a row looks a quarter up instead of searching
+export interface ExplainIndex { e: Explain; binding: Map<string, Explain['binding']> }
+export function indexExplain(e: Explain | undefined): ExplainIndex | undefined {
+  if (!e) return undefined;
+  const binding = new Map<string, Explain['binding']>();
+  for (const b of e.binding) binding.set(`${b.id}:${b.at}`, [...(binding.get(`${b.id}:${b.at}`) ?? []), b]);
+  return { e, binding };
+}
+
+// a shadow price or reduced cost as money per its unit
+const eur = (v: number, uom: string) => `€ ${nl(Math.abs(v), 2)}${uom === 'EUR/C' ? '/°C' : '/kWh'}`;
+const hhmm = (s: number) => { const d = new Date(s * 1000); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+// the text of a binding row, by its code; {v} the money, {id} the phase
+const BIND: Record<string, string> = {
+  balance: 'Energie kost nu {v}', phase: 'Fase {id} vol: {v}', max_output: "Maximale levering accu's bereikt: {v}",
+  soc: 'Een kWh in de accu is {v} waard', own_solar: 'Eigen panelen volledig benut: {v}', inverter: 'Omvormer op maximum: {v}',
+  comfort_floor: 'Op de ondergrens van het comfort: {v}', comfort_ceiling: 'Op de bovengrens: {v}', comfort_target: 'Onder de doeltemperatuur: {v}',
+  knee: 'Boven de knik, minder warmte per kWh: {v}', heat_balance: 'Een graad warmer is {v} waard', mass: 'Een graad in de massa is {v} waard',
+};
+const HOUSE = ['balance', 'phase', 'max_output'];
+
+// the text of a placement reason: the code with its numbers, then the rule, what cut it short and what a full phase skipped
+const REASON: Record<string, string> = {
+  appliance_window: 'Goedkoopste venster vóór {deadline}: {price}', appliance_no_window: 'Geen venster vóór {deadline}: fase vol',
+  ev_maximum: 'Laden op maximum: {kw} kW', ev_solar: 'Laden op zonoverschot: {kw} kW',
+  ev_price: 'Kwartier {rank} van {of} op prijs, {price}: {kw} kW', ev_ready_by: 'Kwartier {rank} van {of} op prijs, {price}: {kw} kW', ev_v2h: 'Kwartier {rank} van {of} op prijs, {price}: {kw} kW',
+  boiler_block: 'Goedkoopste blok van de dag: {price}', boiler_fill: 'Vullen tot {target} °C', boiler_disinfect: 'Desinfectie tot {target} °C', boiler_no_fill: 'Geen vulling: boven blijft {t_min} °C tot morgen',
+};
+const EXTRA: Record<string, string> = {
+  rule_start_time: 'ingestelde starttijd', rule_evening: 'avondregel, klaar om 08:00', rule_day: 'dagregel, binnen 4 uur en vóór 17:00',
+  cut_phase: 'ingekort: fase vol', cut_price: 'ingekort: prijs boven de vergoeding',
+};
+function reasonText(r: Explain['reasons'][string][number]): string {
+  const v = r.v, p: Record<string, string | number> = { ...v };
+  if (typeof v.price === 'number') p.price = eur(v.price, 'EUR/kWh');
+  if (typeof v.deadline === 'number') p.deadline = hhmm(v.deadline);
+  const out = [t(`ui.explain.${r.code}`, REASON[r.code] ?? r.code, p)];
+  for (const k of [v.rule ? `rule_${v.rule}` : '', v.cut ? `cut_${v.cut}` : '']) if (k) out.push(t(`ui.explain.${k}`, EXTRA[k] ?? k));
+  if (Number(v.skipped) > 0) out.push(t('ui.explain.skipped', '{n} goedkopere vensters overgeslagen: fase vol', { n: v.skipped }));
+  return out.join(' · ');
+}
+
+// the text of a reduced cost per kind of series: positive, more would cost more than it brings; negative, it runs at its maximum
+const REDUCED: Record<string, [string, string]> = {
+  power: ['Meer verbruik kost {v} meer dan het oplevert', 'Op maximum vermogen: meer zou {v} opleveren'],
+  charge: ['Laden kost {v} meer dan het oplevert', 'Laadt op maximum: meer zou {v} opleveren'],
+  discharge: ['Ontladen levert {v} minder op dan het kost', 'Ontlaadt op maximum: meer zou {v} opleveren'],
+};
+
+// why one device does what it does in quarter i: its placement reason, its own rows that bind, and what the quarter costs more than it brings
+export function explainDevice(x: ExplainIndex | undefined, i: number, id: string, power: number): string[] {
+  if (!x) return [];
+  const out: string[] = [];
+  // a reason holds from its quarter on while the device draws, so a block shows it over its whole length
+  const r = (x.e.reasons[`${id}_power`] ?? []).filter((y) => y.at <= i).pop();
+  if (r && (r.at === i || Math.abs(power) >= 0.02)) out.push(reasonText(r));
+  for (const b of x.binding.get(`${id}:${i}`) ?? []) out.push(t(`ui.explain.${b.code}`, BIND[b.code] ?? b.code, { v: eur(b.value, b.uom) }));
+  for (const kind in REDUCED) {
+    const v = x.e.reduced[`${id}_${kind}`]?.[i] ?? 0;
+    if (Math.abs(v) >= 0.005) out.push(t(`ui.explain.reduced_${kind}_${v > 0 ? 'up' : 'max'}`, REDUCED[kind][v > 0 ? 0 : 1], { v: eur(v, 'EUR/kWh') }));
+  }
+  return out;
+}
+
+// what holds for the whole house in quarter i: the price of energy, a full phase, the delivery cap of the batteries
+export function explainHouse(x: ExplainIndex | undefined, i: number): string[] {
+  return (x?.e.binding ?? []).filter((b) => b.at === i && HOUSE.includes(b.code)).map((b) => t(`ui.explain.${b.code}`, BIND[b.code], { v: eur(b.value, b.uom), id: b.id }));
+}
 // a hass state as a finite number, null when it is missing or not a number
 export const stateNum = (hass: any, id?: string): number | null => { const n = id && hass?.states?.[id] ? Number(hass.states[id].state) : NaN; return Number.isFinite(n) ? n : null; };
 // one colour per solar group, in config order: the header hint and the solar table use the same
@@ -135,6 +205,7 @@ export function chartData(plan: Plan, history?: HistoryDay[]): any {
 
   return {
     series: s,  // every plan series by id, for the rows that read their own (a battery's charge and discharge)
+    explain: indexExplain(plan.explain),  // why the plan is as it is, for the tooltips of the chart and the rows
     N, NOW: plan.now, times: plan.times, start: plan.start, price_buy, price_sell, solar, load, consumers,
     charge, discharge, soc, grid_buy, grid_sell,
     cij, fcSolar, fcCats, fcDays, fcPriceA, fcPriceB, fc7Solar, fc7PriceA, fc7PriceB, fc7Known, fc7Cats, fc7Days, solarPerDay,

@@ -117,11 +117,11 @@ class Heating(SolverEntry, ConsumerDevice):
         # The floor is a row, not a bound: a store that sits under it cannot always climb back inside the phase limit,
         # and a bound it cannot reach makes the whole LP infeasible. Falling short costs _COMFORT_PENALTY per degC.
         self.slack = lp.column(cost=_COMFORT_PENALTY, lo=0.0)
-        lp.row_quarter({self.temp: 1.0, self.slack: 1.0}, lo=lambda t: self._tmin[t])
+        lp.row_quarter({self.temp: 1.0, self.slack: 1.0}, lo=lambda t: self._tmin[t], label=("comfort_floor", self.id, 1.0, "EUR/C"))
         # the house has a soft ceiling too: above t_max costs the same penalty, so cheap power does not overheat it
         if soft:
             self.over = lp.column(cost=_COMFORT_PENALTY, lo=0.0)
-            lp.row_quarter({self.temp: 1.0, self.over: -1.0}, hi=lambda t: self.t_max)
+            lp.row_quarter({self.temp: 1.0, self.over: -1.0}, hi=lambda t: self.t_max, label=("comfort_ceiling", self.id, 1.0, "EUR/C"))
 
         self._cops = [3.0] * lp.horizon  # absolute COP per quarter for the heat balance, sized to the solve window
         self._mins = [_MIN_KW] * lp.horizon  # the minimum power per quarter, from the outdoor forecast; only _runs uses it
@@ -130,23 +130,23 @@ class Heating(SolverEntry, ConsumerDevice):
             self.mass = lp.column(dest=lp.data(f"{self.id}_mass", "C", name=self.name))
             # under t_min costs a little, so the plan only dips under it when that saves more
             below = lp.column(cost=_TARGET_COST, lo=0.0)
-            lp.row_quarter({self.temp: 1.0, below: 1.0}, lo=lambda t: self.t_min)
+            lp.row_quarter({self.temp: 1.0, below: 1.0}, lo=lambda t: self.t_min, label=("comfort_target", self.id, 1.0, "EUR/C"))
             # power above the knee gives less heat per kW; the LP keeps knee at power - _KNEE when that is positive
             knee = lp.column(lo=0.0)
-            lp.row_quarter({knee: 1.0, self.power: -1.0}, lo=lambda t: -_KNEE, hi=lambda t: 0.0)
+            lp.row_quarter({knee: 1.0, self.power: -1.0}, lo=lambda t: -_KNEE, hi=lambda t: 0.0, label=("knee", self.id, 4.0, "EUR/kWh"))
             # the sun on the expected solar production when there are solar meters, else on the global irradiance
             sun = lambda t: (lp.solar if lp.globals.get("solar_entities") else lp.sun).data[12 + t]
             ua = lambda t: self.ua + self.ua_wind * lp.wind.data[12 + t]
             gain = lambda t: 0.25 / self.ci * (self.sun_gain * sun(t) + self.q_int + ua(t) * self._outdoor.data[12 + t])
-            air = lp.row_delta(lambda t1, t2: self.temp[t1] - (1 - 0.25 * (ua(t2) + self.him) / self.ci) * self.temp[t2] - 0.25 * self.him / self.ci * self.mass[t2] - 0.25 * self._cops[t2] / self.ci * (self.power[t2] - (1 - _KNEE_COP) * knee[t2]), const=gain)
-            mass = lp.row_delta(lambda t1, t2: self.mass[t1] - (1 - 0.25 * self.him / self.cm) * self.mass[t2] - 0.25 * self.him / self.cm * self.temp[t2], const=0.0)
+            air = lp.row_delta(lambda t1, t2: self.temp[t1] - (1 - 0.25 * (ua(t2) + self.him) / self.ci) * self.temp[t2] - 0.25 * self.him / self.ci * self.mass[t2] - 0.25 * self._cops[t2] / self.ci * (self.power[t2] - (1 - _KNEE_COP) * knee[t2]), const=gain, label=("heat_balance", self.id, 1.0, "EUR/C"))
+            mass = lp.row_delta(lambda t1, t2: self.mass[t1] - (1 - 0.25 * self.him / self.cm) * self.mass[t2] - 0.25 * self.him / self.cm * self.temp[t2], const=0.0, label=("mass", self.id, 1.0, "EUR/C"))
             self._rebuild_model = lambda: (air(), mass())
         else:
             # discretized RC model -> temp[t+1] = (1-B)*temp[t] + A*power[t] + B*loss_temp + icept*A, with
             # A = 0.25/(tau*slope) degC per kW-quarter and B = 0.25/tau loss fraction per quarter.
             # The lambdas read the live parameters so a recalibration only needs the row rebuild below.
             loss = lambda t: 0.25 / self.tau * self.ambient + self.icept * 0.25 / (self.tau * self.slope)
-            self._rebuild_model = lp.row_delta(lambda t1, t2: self.temp[t1] + (0.25 / self.tau - 1.0) * self.temp[t2] - 0.25 / (self.tau * self.slope) * self.power[t2], const=loss)
+            self._rebuild_model = lp.row_delta(lambda t1, t2: self.temp[t1] + (0.25 / self.tau - 1.0) * self.temp[t2] - 0.25 / (self.tau * self.slope) * self.power[t2], const=loss, label=("heat_balance", self.id, 1.0, "EUR/C"))
 
     async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         # The house is used as a heat buffer, so the saving is the same heat bought at a better moment:

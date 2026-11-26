@@ -5,7 +5,7 @@ import { tokens } from '../tokens.js';
 import { api } from '../service/api.js';
 import type { Schema, Theme } from '../types.js';
 import { chartColors, flowOption } from '../charts.js';
-import { chartData, consumerCards, nl } from '../derive.js';
+import { chartData, consumerCards, explainDevice, nl } from '../derive.js';
 import { loadDay } from '../service/loader.js';
 import { byKind, fleetDevices } from '../service/drivers.js';
 import { ZendureBle } from '../service/ble.js';
@@ -295,18 +295,23 @@ export class ZmOverview extends LitElement {
   private _devLane(id: string) {
     const s = this._shown?.series ?? {};
     const out: number[] = s[`${id}_discharge`] ?? [], ac: number[] = s[`${id}_charge`] ?? [], dc: number[] = s[`${id}_solar_in`] ?? [];
-    return this._lane(out.map((v, i) => v - (ac[i] ?? 0) - (dc[i] ?? 0)), (v) => (v > 0 ? '#1fb89a' : '#3aa0c9'));
+    return this._lane(out.map((v, i) => v - (ac[i] ?? 0) - (dc[i] ?? 0)), (v) => (v > 0 ? '#1fb89a' : '#3aa0c9'), id);
   }
 
-  // one bar per quarter scaled to the lane's peak, with the power under the mouse as its tooltip
-  private _lane(values: number[], color: (v: number) => string) {
+  // one bar per quarter scaled to the lane's peak, with the power under the mouse and why the plan put it there as its tooltip
+  private _lane(values: number[], color: (v: number) => string, id: string) {
     const times: string[] = this._shown?.times ?? [], peak = Math.max(0.001, ...values.map(Math.abs));
-    return values.map((v, i) => html`<i title=${Math.abs(v) < 0.02 ? nothing : `${times[i]} · ${nl(v, 2)} kW`} style="height:${Math.abs(v) < 0.02 ? 0 : Math.max(3, Math.round(Math.abs(v) / peak * 30))}px;background:${color(v)}"></i>`);
+    return values.map((v, i) => {
+      const why = explainDevice(this._shown?.explain, i, id, v), off = Math.abs(v) < 0.02;
+      // an empty quarter with an explanation keeps a transparent full-height bar, so it can be hovered
+      const title = off && !why.length ? nothing : [off ? times[i] : `${times[i]} · ${nl(v, 2)} kW`, ...why].join('\n');
+      return html`<i title=${title} style="height:${off ? (why.length ? 30 : 0) : Math.max(3, Math.round(Math.abs(v) / peak * 30))}px;background:${off ? 'transparent' : color(v)}"></i>`;
+    });
   }
 
   // a consumer's plan in this lane: its power per quarter, scaled to its own peak like a battery's lane; each bar shows its quarter and power on hover
   private _consLane(c: any) {
-    return this._lane(this._shown?.consumers?.find((x: any) => x.id === c.id)?.power ?? [], () => c.color);
+    return this._lane(this._shown?.consumers?.find((x: any) => x.id === c.id)?.power ?? [], () => c.color, c.id);
   }
 
   private _consRow(c: any) {

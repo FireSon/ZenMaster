@@ -130,14 +130,17 @@ class ElectricVehicle(SolverEntry, ConsumerDevice):
         # the solar left after the planned house load per quarter (kW), index 0 = slot 12
         surplus = [max(0.0, lp.solar.data[c] - sum(load[c - 12] for load in lp.loads[Phase.all])) for c in range(12, 12 + slots_until_departure)]
 
+        # why each planned quarter charges what it does, for the explanation
+        reasons = lp.reasons.setdefault(self.ev_power.id, [])
         if self.ev_charge_mode in (ChargeMode.maximum, ChargeMode.solar):
             for c in range(12, 12 + slots_until_departure):
                 # Maximum takes the full charger power, Solar only the solar surplus of the quarter
                 cap = self.max_power_kw if self.ev_charge_mode is ChargeMode.maximum else min(self.max_power_kw, surplus[c - 12])
                 # wallbox cannot modulate below 4.2 kW: a quarter or remainder under it is left out
-                if max_kwh > 0 and (kwh := lp.phase_room(self.phase, c - 12, min(max_kwh, cap * 0.25))) >= _CHARGER_MIN_KW * 0.25:
+                if max_kwh > 0 and (kwh := lp.phase_room(self.phase, c - 12, (want := min(max_kwh, cap * 0.25)))) >= _CHARGER_MIN_KW * 0.25:
                     max_kwh -= kwh
                     self.ev_power.data[c] = kwh * 4
+                    reasons.append({"at": c, "code": f"ev_{self.ev_charge_mode.name}", "v": {"kw": round(kwh * 4, 2), "cut": "phase" if kwh < want - 1e-6 else ""}})
         else:
             limit = float("inf") if self.ev_charge_mode is ChargeMode.ready_by else self.charge_compensation_eur_kwh
             max_kw = self.max_power_kw * 0.25
@@ -146,21 +149,23 @@ class ElectricVehicle(SolverEntry, ConsumerDevice):
                 # the solar surplus, kW -> kWh for this quarter
                 solar = surplus[i - 12] * 0.25
                 if sell >= limit:
-                    return 0.0, sell
-                kwh = lp.phase_room(self.phase, i - 12, max_kw if buy <= limit else min(max_kw, solar * (buy - sell) / (buy - limit)))
+                    return 0.0, sell, ""
+                kwh = lp.phase_room(self.phase, i - 12, (want := max_kw if buy <= limit else min(max_kw, solar * (buy - sell) / (buy - limit))))
 
                 # wallbox cannot modulate below 4.2 kW
                 if kwh < _CHARGER_MIN_KW * 0.25:
-                    return 0.0, buy
+                    return 0.0, buy, ""
                 grid = max(0.0, kwh - solar)
                 price = ((kwh - grid) * sell + grid * buy) / kwh if kwh > 0 else buy
-                return kwh, price
+                # what held it under the charger power: a full phase, or a buy price over the compensation
+                return kwh, price, "phase" if kwh < want - 1e-6 else "price" if buy > limit else ""
 
             costs = [(i, affordable(i, lp.price_sell.data[i], lp.price_buy.data[i])) for i in range(12, 12 + slots_until_departure)]
-            for i, (kwh, price) in sorted(costs, key=lambda t: t[1][1]):
+            for rank, (i, (kwh, price, cut)) in enumerate(sorted(costs, key=lambda t: t[1][1]), 1):
                 # wallbox cannot modulate below 4.2 kW: a remainder under it is left out
                 if max_kwh > 0 and (kwh := min(max_kwh, kwh)) >= _CHARGER_MIN_KW * 0.25:
                     self.ev_power.data[i] = kwh * 4
                     max_kwh -= kwh
+                    reasons.append({"at": i, "code": f"ev_{self.ev_charge_mode.name}", "v": {"kw": round(kwh * 4, 2), "price": round(float(price), 4), "rank": rank, "of": len(costs), "cut": cut}})
 
         lp.phase_add(self.phase, self.ev_power.data[12:108], 0, slots_until_departure)

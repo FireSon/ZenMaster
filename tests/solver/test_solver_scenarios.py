@@ -29,7 +29,7 @@ def test_place_block_cheapest_window() -> None:
     lp = _placement_lp()
     lp.price_buy.data[12:108] = 1.0
     lp.price_buy.data[12 + 40] = lp.price_buy.data[12 + 41] = 0.1  # cheapest 2-slot window starts at 40
-    start = lp.place_block(Phase.l1, [1.0, 1.0])
+    start = lp.place_block(Phase.l1, [1.0, 1.0])[0]
     assert start == 40
     assert lp.l1[40] == pytest.approx(1.0) and lp.l1[41] == pytest.approx(1.0)
 
@@ -38,7 +38,7 @@ def test_place_block_respects_window_end() -> None:
     lp = _placement_lp()
     lp.price_buy.data[12:108] = 1.0
     lp.price_buy.data[12 + 40] = lp.price_buy.data[12 + 41] = 0.1  # cheap, but outside the allowed window
-    start = lp.place_block(Phase.l1, [1.0, 1.0], 3)  # must fit before slot 3
+    start = lp.place_block(Phase.l1, [1.0, 1.0], 3)[0]  # must fit before slot 3
     assert start is not None and start <= 1
 
 
@@ -47,14 +47,14 @@ def test_place_block_skips_over_phase_limit() -> None:
     lp.price_buy.data[12:108] = 1.0
     lp.price_buy.data[12 + 5] = lp.price_buy.data[12 + 6] = 0.1  # cheapest window, but slot 5 is full
     lp.l1[5] = 17 / 3  # no headroom at slot 5
-    start = lp.place_block(Phase.l1, [1.0, 1.0])
+    start = lp.place_block(Phase.l1, [1.0, 1.0])[0]
     assert start == 6  # next-cheapest window that still fits
     assert lp.l1[6] == pytest.approx(1.0) and lp.l1[7] == pytest.approx(1.0)
 
 
 def test_place_block_no_window_returns_none() -> None:
     lp = _placement_lp()
-    assert lp.place_block(Phase.l1, [1.0, 1.0], 1) is None
+    assert lp.place_block(Phase.l1, [1.0, 1.0], 1)[0] is None
 
 
 def test_solve_grid_supplies_committed_load() -> None:

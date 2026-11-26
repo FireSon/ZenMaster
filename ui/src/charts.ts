@@ -1,5 +1,6 @@
 import type { Theme } from './types.js';
 import { t } from './service/i18n.js';
+import { explainHouse } from './derive.js';
 
 // ECharts option builders, lifted verbatim from the ZenMaster v2 design concept.
 // Each takes `d` (the chart-data shape produced by derive.chartData) and `C` (theme
@@ -50,7 +51,7 @@ export function flowOption(d: any, C: ChartColors, left = 104) {
   const outside = { name: temp, type: 'line', xAxisIndex: 0, yAxisIndex: 3, data: d.series.temp ?? [], symbol: 'none', smooth: true, itemStyle: { color: C.temp }, lineStyle: { color: C.temp, width: 2.2 }, z: 4 };
   return {
     backgroundColor: 'transparent', animation: false, textStyle: { fontFamily: F, color: C.textDim },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross', lineStyle: { color: C.line } }, ...tip(C), formatter: (ps: any) => { if (!ps || !ps.length) return ''; const t = ps[0].axisValue; const rows: string[] = []; ps.forEach((p: any) => { const nm = p.seriesName || ''; let val = Array.isArray(p.value) ? p.value[1] : p.value; if (val == null) return; let txt; if (nm === buy || nm === sell) txt = '€' + Number(val).toFixed(3); else if (nm === 'SoC') txt = Number(val).toFixed(0) + '%'; else if (nm === temp) txt = Number(val).toFixed(1) + ' °C'; else txt = Number(val).toFixed(2) + ' kW'; rows.push(p.marker + nm + ': ' + txt); }); return '<b>' + t + '</b><br/>' + rows.join('<br/>'); } },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross', lineStyle: { color: C.line } }, ...tip(C), formatter: (ps: any) => { if (!ps || !ps.length) return ''; const t = ps[0].axisValue; const rows: string[] = []; ps.forEach((p: any) => { const nm = p.seriesName || ''; let val = Array.isArray(p.value) ? p.value[1] : p.value; if (val == null) return; let txt; if (nm === buy || nm === sell) txt = '€' + Number(val).toFixed(3); else if (nm === 'SoC') txt = Number(val).toFixed(0) + '%'; else if (nm === temp) txt = Number(val).toFixed(1) + ' °C'; else txt = Number(val).toFixed(2) + ' kW'; rows.push(p.marker + nm + ': ' + txt); }); const why = explainHouse(d.explain, ps[0].dataIndex); return '<b>' + t + '</b><br/>' + rows.join('<br/>') + (why.length ? '<br/><span style="opacity:0.7">' + why.join('<br/>') + '</span>' : ''); } },
     legend: { top: 0, left: left + 28, icon: 'roundRect', itemWidth: 11, itemHeight: 7, data: [solar, exp, load, cons, imp, buy, sell, 'SoC', temp], textStyle: { color: C.textDim, fontSize: 13, fontFamily: F } },  // clear of the kW axis name above the plot's left edge
     axisPointer: { link: [{ xAxisIndex: 'all' }] },
     // one grid with the time axis right under it

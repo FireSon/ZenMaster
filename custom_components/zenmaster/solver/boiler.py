@@ -276,6 +276,7 @@ class BoilerHeatPump(Heating):
         price = lp.price_buy.data[12:]  # seven days deep
         if not price[:96].any() or self._layers is None:
             return
+        reasons = lp.reasons.setdefault(self.data.id, [])  # why it fills when it does, for the explanation
 
         # the cheapest day of the disinfection band
         rest = 96 - (now.hour * 4 + now.minute // 15)  # quarters left today
@@ -289,6 +290,8 @@ class BoilerHeatPump(Heating):
         if self.fill_at and now.timestamp() >= self.fill_at:
             if now.timestamp() < self.fill_at + 900.0:
                 self._fill, self._fill_since = self.fill_level(lp, rest, outside), now.timestamp()
+                if not self._fill:  # the top holds t_min until the block of tomorrow
+                    reasons.append({"at": 12, "code": "boiler_no_fill", "v": {"t_min": self.t_min}})
             self.fill_at = 0.0
         # a fill the unit has not started within a quarter is not wanted by its own thermostat: dropped, never run later
         if self._fill and self._run is None and now.timestamp() >= self._fill_since + 900.0:
@@ -303,6 +306,8 @@ class BoilerHeatPump(Heating):
             self._disinfect, target = True, self.t_max
         self._target = target
         self.on_temp(self._temp0)
+        if target:
+            reasons.append({"at": 12, "code": "boiler_disinfect" if self._disinfect else "boiler_fill", "v": {"target": round(float(target), 1)}})
 
         # the target itself goes to the unit, so the unit stops there too; what it actually draws back onto its phase
         self.write_setpoint(self._target if self._target else None)
@@ -313,6 +318,7 @@ class BoilerHeatPump(Heating):
         self.data.data[13:] = 0.0
         if (ahead := int((self.fill_at - now.timestamp() // 900 * 900) // 900)) > 0:
             self.data.data[12 + ahead:12 + ahead + self.fill_quarters(outside)] = self.max_power
+            reasons.append({"at": 12 + ahead, "code": "boiler_block", "v": {"price": round(float(np.mean(price[ahead:ahead + self.fill_quarters(outside)])), 4)}})
         # a running fill: its remaining quarters after this one
         elif self._target:
             self.data.data[13:12 + self.fill_quarters(outside)] = self.max_power

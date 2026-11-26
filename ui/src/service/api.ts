@@ -1,4 +1,4 @@
-import type { Schema, PlanSeries, SaveResult, HistoryDay, RowAction } from '../types.js';
+import type { Schema, PlanSeries, SaveResult, HistoryDay, RowAction, Explain } from '../types.js';
 
 // Thin client for the UI <-> backend contract. Standalone (tools/ui_server.py) uses HTTP
 // POST /api/<cmd>; inside HA the panel installs a websocket transport (same payloads).
@@ -55,7 +55,7 @@ export interface SchemaBundle {
 
 export const api = {
   getSchema: () => call<SchemaBundle>('get_schema'),
-  getPlan: () => call<{ slot: number | null; series: PlanSeries[] }>('get_plan'),
+  getPlan: () => call<{ slot: number | null; series: PlanSeries[]; explain?: Explain }>('get_plan'),
   getHistory: () => call<{ days: HistoryDay[] }>('get_history'),
   getDay: (day: string) => call<PlanSeries[]>('get_day', { day }),
   // The settings tab (distribution, price, zendure): one singleton edit at a time.

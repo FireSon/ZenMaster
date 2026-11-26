@@ -196,6 +196,9 @@ class LpSolver:
         self.l3: np.array
         self._last_slot: int | None = None  # quarter index of the last run, drives shift()
         self.settle = 12  # index of the quarter the measurements since the previous run belong to
+        self._labels: list[tuple | None] = []  # per row: (label, quarter) for the explanation, None when unlabelled
+        self._duals: tuple[np.ndarray, np.ndarray] | None = None  # row and column duals of the last solve, None when HiGHS gave none
+        self.reasons: dict[str, list[dict]] = {}  # per series id: why a consumer outside the LP was placed where it is, filled in prerun
 
     def init(self, entries):
         # one-time: build columns + rows. The structure stays fixed for the whole run; bounds are lambdas.
@@ -203,17 +206,18 @@ class LpSolver:
         self._columns = []
         self._phase_columns = []
         self._rows = []
+        self._labels = []
         self._data = []
         self.globals = {}
         for entry in self._entries:
             entry.entry_config(self)
 
-        self.row_quarter({"supply": 1.0, "draw": -1.0}, lo=lambda t: self.l1[t] + self.l2[t] + self.l3[t], hi=lambda t: self.l1[t] + self.l2[t] + self.l3[t])
+        self.row_quarter({"supply": 1.0, "draw": -1.0}, lo=lambda t: self.l1[t] + self.l2[t] + self.l3[t], hi=lambda t: self.l1[t] + self.l2[t] + self.l3[t], label=("balance", "", 4.0, "EUR/kWh"))
         self.limit = self.globals["phase_limit_kw"]
         # per phase the draws in the room the fixed load leaves; a phase already full leaves none, never an infeasible plan
         for ph, name in ((1, "l1"), (2, "l2"), (3, "l3")):
             factors = {c: (1.0 if p == ph else 1.0 / 3) for c, p in self._phase_columns if p in (0, ph)}
-            self.row_quarter(factors, hi=lambda t, n=name: max(0.0, self.limit - getattr(self, n)[t]))
+            self.row_quarter(factors, hi=lambda t, n=name: max(0.0, self.limit - getattr(self, n)[t]), label=("phase", name.upper(), 4.0, "EUR/kWh"))
 
     async def run(self, now):
         # shift the history window one slot per elapsed quarter (re-runs within the same quarter don't shift)
@@ -237,6 +241,10 @@ class LpSolver:
 
         for c in self._columns:
             c.init(self)
+
+        # the reasons and duals are those of this run only
+        self.reasons = {}
+        self._duals = None
 
         # per quarter: only re-evaluate and solve; columns/rows were already built once in init()
         for entry in self._entries:
@@ -282,9 +290,11 @@ class LpSolver:
             solver.setOptionValue("time_limit", 30.0)
             solver.passModel(lp)
             solver.run()
-            return solver.getModelStatus(), np.asarray(solver.getSolution().col_value, float)
+            sol = solver.getSolution()
+            duals = (np.asarray(sol.row_dual, float), np.asarray(sol.col_dual, float)) if sol.dual_valid else None
+            return solver.getModelStatus(), np.asarray(sol.col_value, float), duals
 
-        status, x = await asyncio.get_running_loop().run_in_executor(None, solve)
+        status, x, self._duals = await asyncio.get_running_loop().run_in_executor(None, solve)
         self._last_lp_status = 0 if status == highspy.HighsModelStatus.kOptimal else 1
         if self._last_lp_status != 0:
             _LOGGER.warning("LP solve not optimal: %s", status)
@@ -329,7 +339,24 @@ class LpSolver:
 
     def plan(self) -> dict:
         # UI get_plan: the quarter of index 12 (the last run), and every SolverData as its full slot series (12 history slots first)
-        return {"slot": self._last_slot, "series": [{"id": sd.id, "uom": sd.uom, "source": sd.source, "known": sd.known, "values": list(sd.data)} for sd in self._data]}
+        return {"slot": self._last_slot, "series": [{"id": sd.id, "uom": sd.uom, "source": sd.source, "known": sd.known, "values": list(sd.data)} for sd in self._data], "explain": self.explain()}
+
+    def explain(self) -> dict:
+        # why the plan is as it is: the labelled rows that bind per quarter, per kW series what a quarter costs more than it brings, and the placement reasons
+        binding, reduced, h = [], {}, self.horizon
+        if self._duals is not None:
+            rows, cols = self._duals
+            # a row binds when its shadow price is not zero; scaled to money per kWh or per degree
+            for label, d in zip(self._labels, rows):
+                if label is not None and (value := abs(d) * (label[0][2]() if callable(label[0][2]) else label[0][2])) > 1e-4:
+                    binding.append({"at": 12 + label[1], "code": label[0][0], "id": label[0][1], "uom": label[0][3], "value": round(float(value), 4)})
+            # the reduced cost per quarter of each kW series, from cost per kW per quarter to EUR/kWh, aligned with the series values
+            for col in self._columns:
+                if col.dest is not None and col.dest.uom == "kW":
+                    values = np.zeros(len(col.dest.data))
+                    values[12 : 12 + h] = np.round(cols[col.index : col.index + h] * 4, 4)
+                    reduced[col.dest.id] = values.tolist()
+        return {"binding": binding, "reduced": reduced, "reasons": self.reasons}
 
     def history(self) -> dict:
         # every series whole, history and plan, with the quarter of the last run
@@ -365,8 +392,9 @@ class LpSolver:
         # bound as a 0-arg thunk (deferred until solve) if it is f(t), otherwise the number/None itself
         return (lambda: b(t)) if callable(b) else b
 
-    def row_quarter(self, factors: dict, lo: Bound | None = None, hi: Bound | None = None) -> None:
+    def row_quarter(self, factors: dict, lo: Bound | None = None, hi: Bound | None = None, label: tuple | None = None) -> None:
         # one row per quarter: sum factor*column. A str key expands to every column with that tag; an LpColumn key is used directly.
+        # label (code, id, scale, uom) names the row in the explanation, id the device it belongs to; scale (a number or a thunk) turns its dual into uom
         cols = []
         for key, f in factors.items():
             cols += [(c, f) for c in self.tagged(key)] if isinstance(key, str) else [(key, f)]
@@ -377,12 +405,14 @@ class LpSolver:
             for c, f in cols:
                 expr += f * c[t]
             self._rows.append((expr, self._bound(lo, t), self._bound(hi, t)))
+            self._labels.append((label, t) if label is not None else None)
 
-    def row_delta(self, expr: Callable[[int, int], LinExpr], const: Bound = 0.0, lo: Bound | None = None, hi: Bound | None = None) -> Callable[[], None]:
+    def row_delta(self, expr: Callable[[int, int], LinExpr], const: Bound = 0.0, lo: Bound | None = None, hi: Bound | None = None, label: tuple | None = None) -> Callable[[], None]:
         # couple two quarters over the whole horizon: equality expr(t+1,t)==const, or inequality lo/hi
         # returns build() that re-evaluates expr in place; call it in prerun when coefficients change
         start = len(self._rows)
         n = self.horizon - 1
+        self._labels.extend([(label, t + 1) if label is not None else None for t in range(n)])
 
         def build() -> None:
             for t in range(n):
@@ -396,21 +426,23 @@ class LpSolver:
         build()
         return build
 
-    def place_block(self, phase: Phase, powerprofile: list[float], latest: int = 96) -> int | None:
+    def place_block(self, phase: Phase, powerprofile: list[float], latest: int = 96) -> tuple[int | None, float, int]:
         # place a fixed appliance cycle in its cheapest buy-price window, keeping every phase load under the limit, then commit it
+        # returns the start, the price of that window per kWh, and how many cheaper windows a full phase ruled out
         price = self.price_buy.data[12 : 12 + self.horizon]
         loads = self.loads[phase]
         per = [p / len(loads) for p in powerprofile]  # the power each phase carries: a third of it on all phases
         length = len(powerprofile)
-        best_cost, best_start = float("inf"), None
+        best_cost, best_start, full = float("inf"), None, []
         for start in range(latest - length + 1):
-            if any(load[start + step] + per[step] > self.limit for load in loads for step in range(length)):
-                continue
             window_cost = sum(powerprofile[step] * price[start + step] for step in range(length))
+            if any(load[start + step] + per[step] > self.limit for load in loads for step in range(length)):
+                full.append(window_cost)
+                continue
             if window_cost < best_cost:
                 best_cost, best_start = window_cost, start
         if best_start is not None:
             for load in loads:
                 for step in range(length):
                     load[best_start + step] += per[step]
-        return best_start
+        return best_start, best_cost / sum(powerprofile) if best_start is not None and sum(powerprofile) else 0.0, sum(c < best_cost for c in full)

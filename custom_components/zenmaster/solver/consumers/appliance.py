@@ -236,6 +236,7 @@ class Appliance(SolverEntry, ConsumerDevice):
             if slot is not None:
                 # started by then, so finished a cycle later: place_block wants the slots it must be finished in
                 latest = ((slot - (now.hour * 60 + now.minute) // 15) % 96 or 96) + len(profile)  # wall-clock slot -> slots from now
+                rule = "start_time"
             else:
                 # no fixed time: the moment of arming sets the deadline. In the evening the cycle must be done by
                 # 08:00; during the day within four hours and never past 17:00, so it cannot run into cooking.
@@ -243,13 +244,15 @@ class Appliance(SolverEntry, ConsumerDevice):
                 mins = armed.hour * 60 + armed.minute
                 if mins >= _EVENING_MIN or mins < _MORNING_MIN:
                     day = armed + timedelta(days=1) if mins >= _EVENING_MIN else armed
-                    deadline = day.replace(hour=8, minute=0, second=0, microsecond=0)
+                    deadline, rule = day.replace(hour=8, minute=0, second=0, microsecond=0), "evening"
                 else:
-                    deadline = min(armed + timedelta(hours=4), armed.replace(hour=17, minute=0, second=0, microsecond=0))
+                    deadline, rule = min(armed + timedelta(hours=4), armed.replace(hour=17, minute=0, second=0, microsecond=0)), "day"
                 latest = max(len(profile), int((deadline - now).total_seconds() // 900))  # place_block wants slots to be finished in
-            start = lp.place_block(self.phase, profile, latest)
+            start, price, skipped = lp.place_block(self.phase, profile, latest)
             if start is not None:
                 self.data.data[12 + start : 12 + start + len(profile)] = profile
+            # the cheapest window before the deadline, and the cheaper ones a full phase ruled out
+            lp.reasons[self.data.id] = [{"at": 12 + (start or 0), "code": "appliance_window" if start is not None else "appliance_no_window", "v": {"price": round(float(price), 4), "deadline": int(now.timestamp()) // 900 * 900 + 900 * latest, "rule": rule, "skipped": int(skipped)}}]
         # the plan wants it on now: keep asking until the appliance actually draws, so a command lost while the
         # switch was unavailable is simply sent again. busy follows the measurement, in on_power.
         if self.manage and self.armed and not self.busy and self.data.data[12] > 0 and (switch == "off" or self.switch_type in ("pause", "remote") or not self._switched):

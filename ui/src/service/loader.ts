@@ -1,4 +1,4 @@
-import type { Plan, ConsumerSeries, BatterySeries, Kpis } from '../types.js';
+import type { Plan, ConsumerSeries, BatterySeries, Kpis, Explain } from '../types.js';
 import { api } from './api.js';
 
 // Maps the live get_plan output into a uniform Plan.
@@ -42,6 +42,7 @@ let _full: Record<string, number[]> = {};
 let _known = 0;  // where the real prices end, from the price series
 // epoch ms of index 0 of the cached plan, from the quarter the solver ran in
 let _slot0 = 0;
+let _explain: Explain | null = null;  // the explanation of the cached plan, on the same indices as its series
 
 function windowTimes(t0: number, count: number): string[] {
   const out: string[] = [];
@@ -59,8 +60,19 @@ export async function refetchLive(): Promise<void> {
   for (const item of plan.series) full[item.id] = item.values;
   _full = full;
   _known = plan.series.find((x) => x.id === 'price_buy')?.known ?? 0;
+  _explain = plan.explain ?? null;
   // the quarter the solver ran in; before the first run there is none yet, then now
   _slot0 = ((plan.slot ?? Math.floor(Date.now() / SLOT_MS)) - HISTORY) * SLOT_MS;
+}
+
+// the explanation for one window: the quarters shifted to it, the reduced costs sliced like the series
+function sliceExplain(start: number, end: number): Explain | undefined {
+  if (!_explain) return undefined;
+  const at = <T extends { at: number }>(xs: T[]) => xs.filter((x) => x.at >= start && x.at < end).map((x) => ({ ...x, at: x.at - start }));
+  const reasons: Explain['reasons'] = {}, reduced: Explain['reduced'] = {};
+  for (const id in _explain.reasons) reasons[id] = at(_explain.reasons[id]);
+  for (const id in _explain.reduced) reduced[id] = _explain.reduced[id].slice(start, end);
+  return { binding: at(_explain.binding), reduced, reasons };
 }
 
 // Build a Plan for one window [start, end) by slicing the cached full series (clamped per series).
@@ -73,7 +85,7 @@ export function sliceLive(start: number, end: number, config: any): Plan {
     if (v.length > count) count = v.length;
   }
   const t0 = _slot0 + start * SLOT_MS;
-  return { ...buildPlan(series, windowTimes(t0, count), t0, Math.max(0, HISTORY - start), config), priceKnown: _known };
+  return { ...buildPlan(series, windowTimes(t0, count), t0, Math.max(0, HISTORY - start), config), priceKnown: _known, explain: sliceExplain(start, end) };
 }
 
 // one past day as it really went (get_day): the quarters of that day from midnight, without a now

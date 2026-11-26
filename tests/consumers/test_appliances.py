@@ -214,7 +214,7 @@ def _latest(armed: str, slots: int = 6) -> int:
 
     seen = {}
     d, _ = _dw()
-    d.data = SimpleNamespace(data=np.zeros(204))  # entry_config normally makes this
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))  # entry_config normally makes this
     d._profile = [0.5] * slots
     d.armed, d._last_cal = True, datetime.now()
     now = datetime.fromisoformat(f"2026-08-30T{armed}+02:00")
@@ -223,7 +223,7 @@ def _latest(armed: str, slots: int = 6) -> int:
         hass=None,
         price_buy=SimpleNamespace(data=[0.2] * 250), settle=12,
         globals={},
-        place_block=lambda phase, profile, latest: seen.setdefault("latest", latest),
+        place_block=lambda phase, profile, latest: (seen.setdefault("latest", latest), 0.0, 0), reasons={},
     )
     asyncio.run(d.entry_prerun(lp, now))
     return seen["latest"]
@@ -281,12 +281,12 @@ def test_a_lost_switch_command_is_sent_again() -> None:
     import numpy as np
 
     d, h = _dw()
-    d.data = SimpleNamespace(data=np.zeros(204))
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))
     d._profile = [0.5] * 4          # place_block puts this at slot 12, so the plan wants it on now
     now = datetime.now().astimezone()
     d.armed, d._last_cal = True, now
     # the plan puts the block at 'now'
-    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, place_block=lambda *a: 0)
+    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
     asyncio.run(d.entry_prerun(lp, now))
     asyncio.run(d.entry_prerun(lp, now))
@@ -309,9 +309,9 @@ def test_the_switch_being_on_voids_the_arming() -> None:
     d, h = _dw()
     now = datetime.now().astimezone()
     h.states = SimpleNamespace(get=lambda eid: SimpleNamespace(state="on", last_changed=now))  # turned on after the arming
-    d.data = SimpleNamespace(data=np.zeros(204))
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp() - 3600, now, [0.5] * 4
-    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, place_block=lambda *a: 0)
+    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
     asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is False and d.status.name == "none"
@@ -327,9 +327,9 @@ def test_the_switch_still_on_from_before_the_arming_keeps_it() -> None:
     d, h = _dw()
     now = datetime.now().astimezone()
     h.states = SimpleNamespace(get=lambda eid: SimpleNamespace(state="on", last_changed=now - timedelta(hours=1)))
-    d.data = SimpleNamespace(data=np.zeros(204))
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp(), now, [0.5] * 4
-    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, place_block=lambda *a: 8)
+    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (8, 0.0, 0))
 
     asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is True, "het uit-commando is onderweg: de arming blijft staan"
@@ -342,10 +342,10 @@ def test_the_status_waits_for_real_power() -> None:
     import numpy as np
 
     d, h = _dw()
-    d.data = SimpleNamespace(data=np.zeros(204))
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))
     now = datetime.now().astimezone()
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp(), now, [0.5] * 4
-    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, place_block=lambda *a: 0)
+    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
     asyncio.run(d.entry_prerun(lp, now))
     assert d.status.name == "planned", "aangezet maar nog geen stroom: gepland, niet draaiend"
@@ -361,10 +361,10 @@ def test_an_unavailable_switch_is_left_alone() -> None:
 
     d, h = _dw()
     h.states = SimpleNamespace(get=lambda eid: SimpleNamespace(state="unavailable"))
-    d.data = SimpleNamespace(data=np.zeros(204))
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))
     now = datetime.now().astimezone()
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp(), now, [0.5] * 4
-    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, place_block=lambda *a: 0)
+    lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
     asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is True, "onbekende stand mag de arming niet wissen"
@@ -400,11 +400,11 @@ def _planned_now(d: Appliance, h: _Hass):
 
     import numpy as np
 
-    d.data = SimpleNamespace(data=np.zeros(204))
+    d.data = SimpleNamespace(id="appliance_power", data=np.zeros(204))
     d._profile = [0.5] * 4
     now = datetime.now().astimezone()
     d._last_cal = now
-    return SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, place_block=lambda *a: 0), now
+    return SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0)), now
 
 
 def test_with_a_pause_button_the_start_is_paused_and_resumed() -> None:

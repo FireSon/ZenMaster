@@ -80,6 +80,13 @@ export interface BatterySeries {
   soc: number[];
 }
 
+// why the plan is as it is (get_plan explain), sliced to a window like the series: at is the index in it
+export interface Explain {
+  binding: Array<{ at: number; code: string; id: string; uom: string; value: number }>;
+  reduced: Record<string, number[]>;
+  reasons: Record<string, Array<{ at: number; code: string; v: Record<string, number | string> }>>;
+}
+
 export interface Plan {
   times: string[];
   start: number;  // epoch ms of times[0]
@@ -89,4 +96,5 @@ export interface Plan {
   consumers: ConsumerSeries[];
   battery: BatterySeries | null;
   priceKnown?: number;  // epoch seconds where the real prices end
+  explain?: Explain;
 }

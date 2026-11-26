@@ -38,10 +38,10 @@ class BatteryUnit:
         self.dc_in = lp.column(hi=0.0, dest=lp.data(f"{key}_solar_in", "kW", name=name))
         self.dc_out = lp.column(hi=0.0, tags=("supply",), dest=lp.data(f"{key}_solar_out", "kW", name=name))
         self.soc = lp.column(lo=0.0, hi=1.0, dest=lp.data(f"{key}_soc", "0-1", name=name))
-        self.rebuild = lp.row_delta(lambda t1, t2: self.soc[t1] - self.soc[t2] - self.gain * (AC_IN * self.charge[t2] + DC_IN * self.dc_in[t2]) + self.gain * self.discharge[t2], const=0.0)
+        self.rebuild = lp.row_delta(lambda t1, t2: self.soc[t1] - self.soc[t2] - self.gain * (AC_IN * self.charge[t2] + DC_IN * self.dc_in[t2]) + self.gain * self.discharge[t2], const=0.0, label=("soc", key, lambda: 1 / self.cap if self.cap else 0.0, "EUR/kWh"))
         # its own panels either fill the pack or leave through its inverter, which also carries the discharge
-        lp.row_quarter({self.dc_in: 1.0, self.dc_out: 1.0}, hi=lambda t: self.solar[t])
-        lp.row_quarter({self.discharge: 1.0, self.dc_out: 1.0}, hi=lambda t: self.out_max)
+        lp.row_quarter({self.dc_in: 1.0, self.dc_out: 1.0}, hi=lambda t: self.solar[t], label=("own_solar", key, 4.0, "EUR/kWh"))
+        lp.row_quarter({self.discharge: 1.0, self.dc_out: 1.0}, hi=lambda t: self.out_max, label=("inverter", key, 4.0, "EUR/kWh"))
 
     def prerun(self, h: int, meters: dict[str, np.ndarray], wear_mean: float, terminal: float) -> None:
         x = self.device
@@ -131,7 +131,7 @@ class DistributionEntry(SolverEntry):
 
         # the regulatory cap on what the fleet delivers to the house (Germany: 800 W), in the plan as in the live setpoint
         if d.max_output > 0:
-            lp.row_quarter({**{u.discharge: 1.0 for u in self._units}, **{u.dc_out: 1.0 for u in self._units}}, hi=d.max_output / 1000)
+            lp.row_quarter({**{u.discharge: 1.0 for u in self._units}, **{u.dc_out: 1.0 for u in self._units}}, hi=d.max_output / 1000, label=("max_output", "", 4.0, "EUR/kWh"))
 
     @staticmethod
     def _walk(stock: float, basis: float, charge: float, discharge: float, charge_grid: float, discharge_grid: float, buy: float, sell: float) -> tuple[float, float, float]:
