@@ -73,8 +73,8 @@ class BatteryUnit:
         self.soc.upper[1:h] = max(1.0, start)
         self.soc.costs[h - 1] = -self.cap * terminal  # realizable terminal value = sell price (prevents buy-to-hoard)
 
-        # a pack that has worked more than the fleet's average costs more per kWh, so the plan turns to it later
-        self.discharge.costs[0:h] = WEAR_EUR * (1 + WEAR_BIAS * x.wear / wear_mean if wear_mean else 1) * 0.25
+        # a pack that has worked more than the fleet's average costs more per kWh, one that worked less costs less, so the plan turns to it later; the average stays WEAR_EUR
+        self.discharge.costs[0:h] = WEAR_EUR * (1 + WEAR_BIAS * (x.wear / wear_mean - 1) if wear_mean else 1) * 0.25
 
 
 class DistributionEntry(SolverEntry):
