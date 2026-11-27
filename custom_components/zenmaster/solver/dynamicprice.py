@@ -76,6 +76,7 @@ class DynamicPrice(SolverEntry):
             {"value": "awattar", "label": "aWATTar (AT)"},
             {"value": "smartenergy", "label": "smartENERGY (AT)"},
             {"value": "NomosProvider", "label": "NOMOS (DE)"},
+            {"value": "OctopusProvider", "label": "Octopus Energy (DE)"},
         ]}}, cast=str),
         ConfigField("saldering", {"boolean": {}}, cast=bool),
         ConfigField("import_markup", {"number": {"step": 0.001, "unit_of_measurement": "EUR/kWh"}}, cast=_optional_float, required=False, visible_when={"provider": _SPOT_PROVIDERS}),
@@ -86,8 +87,8 @@ class DynamicPrice(SolverEntry):
         ConfigField("offpeak_hours_summer", {"text": {}}, cast=str, required=False, visible_when={"country": ["FR"]}),
         ConfigField("export_factor", {"number": {"step": 0.001}}, cast=_optional_float, required=False, visible_when={"country": ["DE", "FR", "AT"]}),
         ConfigField("export_markup", {"number": {"step": 0.001, "unit_of_measurement": "EUR/kWh"}}, cast=_optional_float, required=False, visible_when={"country": ["DE", "FR", "AT"]}),
-        ConfigField("email", {"text": {}}, cast=str, required=False, visible_when={"provider": ["ZonneplanProvider", "FrankProvider"]}),
-        ConfigField("password", {"text": {"type": "password"}}, cast=str, required=False, transient=True, visible_when={"provider": ["FrankProvider"]}),
+        ConfigField("email", {"text": {}}, cast=str, required=False, visible_when={"provider": ["ZonneplanProvider", "FrankProvider", "OctopusProvider"]}),
+        ConfigField("password", {"text": {"type": "password"}}, cast=str, required=False, transient=True, visible_when={"provider": ["FrankProvider", "OctopusProvider"]}),
         ConfigField("access_token", {"text": {"type": "password"}}, cast=str, required=False, visible_when={"provider": ["TibberProvider"]}),
         ConfigField("client_id", {"text": {}}, cast=str, required=False, visible_when={"provider": ["NomosProvider"]}),
         ConfigField("client_secret", {"text": {"type": "password"}}, cast=str, required=False, visible_when={"provider": ["NomosProvider"]}),
@@ -488,4 +489,4 @@ class ProviderError(Exception):
 
 
 # import the provider implementations so they register as Provider subclasses (used in entry_config)
-from .dynamicprices import energycharts, frank, tibber, zonneplan, nextenergy, nordpool, nomos  # noqa: E402,F401
+from .dynamicprices import energycharts, frank, tibber, zonneplan, nextenergy, nordpool, nomos, octopus  # noqa: E402,F401
