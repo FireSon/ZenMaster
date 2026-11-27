@@ -76,7 +76,7 @@ class DynamicPrice(SolverEntry):
             {"value": "awattar", "label": "aWATTar (AT)"},
             {"value": "smartenergy", "label": "smartENERGY (AT)"},
             {"value": "NomosProvider", "label": "NOMOS (DE)"},
-			{"value": "OctopusProvider", "label": "Octopus Energy (DE)"},
+            {"value": "OctopusProvider", "label": "Octopus Energy (DE)"},
         ]}}, cast=str),
         ConfigField("saldering", {"boolean": {}}, cast=bool),
         ConfigField("import_markup", {"number": {"step": 0.001, "unit_of_measurement": "EUR/kWh"}}, cast=_optional_float, required=False, visible_when={"provider": _SPOT_PROVIDERS}),
@@ -131,7 +131,6 @@ class DynamicPrice(SolverEntry):
         self.price_sell = lp.price_sell = lp.data("price_sell", "euro", 7, source=self.provider)
         providers = {c.__name__.removesuffix("Provider").casefold(): c for c in Provider.__subclasses__()}
         name = self.provider.removesuffix("Provider").casefold()
-        _LOGGER.warning("providers %s, name %s", providers, name)
         if name not in providers and self.provider not in _SPOT_PROVIDERS and self.provider != "none":
             _LOGGER.warning("Unknown price provider %r, falling back to energycharts (wholesale)", self.provider)
         self._provider = providers.get(name, providers["energycharts"])()
@@ -158,14 +157,7 @@ class DynamicPrice(SolverEntry):
     async def authorise(self, hass, otp: str) -> None:
         # A code typed into the price card, submitted with that save. It is exchanged straight away and
         # never stored; what is stored is the token. Asking for a code is the button, not this.
-        providers = {
-            c.__name__.removesuffix("Provider").casefold(): c
-            for c in Provider.__subclasses__()
-        }
-
-        name = self.provider.removesuffix("Provider").casefold()
-
-        provider = providers.get(name, providers["energycharts"])()
+        provider = self._provider
         if not otp or not hasattr(provider, "submit_otp"):
             return
         try:
@@ -428,7 +420,8 @@ class Provider:
         # forecast tail beyond the day-ahead window (real day's intraday shape); slots 0..11 untouched
         self.extend_tail(sell, tail, base, "sell")
         buy[tail:] = (sell[tail:] * self.import_factor + markup + self.tou[tail:]) * vat
-        sell[12:] = (sell[12:] * self.export_factor + self.export_markup) * vat  # the feed-in price; buy above was built on the bare spot        self.extend_buy(buy, sell, tail, base)
+        sell[12:] = sell[12:] * self.export_factor + self.export_markup  # the feed-in price; buy above was built on the bare spot
+        self.extend_buy(buy, sell, tail, base)
         return buy, sell
 
     async def fetch(self, dynamic_price: DynamicPrice, now: datetime):
