@@ -252,15 +252,17 @@ class DistributionEntry(SolverEntry):
         # why this window: the buy price weighted by what every pack moves over AC, its bound after loss (charge) or wear (discharge),
         # against the value of a stored kWh in that same pack at the end of each quarter, weighted the same way (Jan, 2026-11-26)
         buy = lp.price_buy.data[12:12 + lp.horizon]
-        price = value = moved = 0.0
+        price = wear = value = moved = 0.0
         for u in (u for u in self._units if u.cap):
             f = (u.charge if way == "charge" else u.discharge).dest.data[12 + a:12 + b]
             worth = np.append(lp.label_duals("soc", u.device.device_id), 0.0)[a + 1:b + 1]  # the row of quarter t+1 carries the value at the end of t
-            price, value, moved = price + float((f * buy[a:b]).sum()), value + float((f * worth).sum()), moved + float(f.sum())
+            # the wear of this pack per kWh discharged, as the plan charges it: its own share of WEAR_EUR by how much it has worked
+            price, wear = price + float((f * buy[a:b]).sum()), wear + float((f * u.discharge.costs[a:b] * 4).sum())
+            value, moved = value + float((f * worth).sum()), moved + float(f.sum())
         if not moved:
             return {}
-        price, value = price / moved, value / moved
-        return {"price": round(price, 4), "bound": round(price / AC_IN if way == "charge" else price - WEAR_EUR, 4), "value": round(value, 4)}
+        price, wear, value = price / moved, wear / moved, value / moved
+        return {"price": round(price, 4), "bound": round(price / AC_IN if way == "charge" else price - wear, 4), "value": round(value, 4), "wear": round(wear, 4)}
 
     def _alternative(self, lp: LpSolver, flow: np.ndarray, way: str) -> dict:
         # the next best quarter this way: outside every window of it, the reduced cost of the pack it costs least there, in EUR/kWh
@@ -269,7 +271,12 @@ class DistributionEntry(SolverEntry):
         h, alt = lp.horizon, np.full(lp.horizon, np.inf)
         for u in (u for u in self._units if u.cap):
             col = u.charge if way == "charge" else u.discharge
-            alt = np.minimum(alt, lp.duals[1][col.index:col.index + h] * 4)
+            rc = lp.duals[1][col.index:col.index + h] * 4
+            # a pack that cannot move this way there is no alternative: full for charging, empty for discharging, or the flow pinned to 0
+            soc = u.soc.dest.data[12:12 + h]
+            rc[(soc >= u.soc.upper - 1e-6) if way == "charge" else (soc <= 1e-6)] = np.inf
+            rc[col.upper <= 0] = np.inf
+            alt = np.minimum(alt, rc)
         alt[(flow > EPS_KW) | (alt < 0)] = np.inf
         alt[0] = np.inf  # quarter 0 is the one running now
         if not np.isfinite(k := int(np.argmin(alt))) or not np.isfinite(alt[k]):
