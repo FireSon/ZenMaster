@@ -114,7 +114,7 @@ actions:
       entity_id: button.vaatwasser_resume   # the appliance's own resume or start
 ```
 
-With another switch type, an appliance that waits without drawing power is armed by pressing `button.<appliance>_arm`, for example from an automation. With a program duration sensor (for example Home Connect's estimated total program time) the learned cycle is stretched or shortened to the selected program's length.
+With another switch type, an appliance that waits without drawing power is armed by pressing `button.<appliance>_arm`, for example from an automation. With a plug, that button also switches the plug off, and with pause/resume it presses the pause button, so an appliance that already runs waits for its window. With a program duration sensor (for example Home Connect's estimated total program time) the learned cycle is stretched or shortened to the selected program's length.
 
 ### Prices, solar and base load
 

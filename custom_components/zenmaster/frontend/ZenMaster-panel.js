@@ -279,7 +279,7 @@ var Wa={},Ga={};var Ua=function(){function t(t,e,i){var n=this;this._sleepAfterS
         <div class="lbl">
           <div class="nm"><div class="n">${this._haName(t.name,t.eid,t.id)}</div><div class="m"><i style="background:${t.dot}"></i>${t.phase?j`<span class="ph">${t.phase}</span>`:Z}${t.model}</div></div>
           <div class="w" style="color:${t.wattColor}">${t.net>0?"+":""}${t.net}<span class="u"> W</span></div>
-          <div class="bat">${t.hasPack?j`<i style="width:${t.socPct}%"></i>`:Z}</div>
+          <div class="bat">${t.hasPack?j`<i style="width:${t.socPct}%"></i><b>${Math.round(t.socPct)}%</b>`:Z}</div>
           ${"plan"===this.view?j`<div class="dpop">${this._devTiles(t)}</div>`:Z}
         </div>
         <div class="lane ${"tiles"===this.view?"tiles":""}">${"tiles"===this.view?this._devTiles(t):this._devLane(t.id)}</div>
@@ -377,8 +377,9 @@ var Wa={},Ga={};var Ua=function(){function t(t,e,i){var n=this;this._sleepAfterS
       .nm .m i { flex: none; width: 7px; height: 7px; border-radius: 50%; }
       .w { flex: none; width: 68px; text-align: right; font-family: var(--zm-font-display); font-weight: 600; font-size: var(--zm-fs-l); line-height: 1; }
       .w .u { font-size: var(--zm-fs-s); color: var(--zm-text-dim); }
-      .bat { flex: none; width: 70px; height: 16px; margin-left: 10px; border: 1.5px solid var(--zm-text-faint); border-radius: 4px; padding: 2px; display: flex; }
+      .bat { flex: none; width: 70px; height: 22px; margin-left: 10px; border: 1.5px solid var(--zm-text-faint); border-radius: 4px; padding: 2px; display: flex; position: relative; }
       .bat i { background: #1fb89a; border-radius: 2px; }
+      .bat b { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--zm-text); text-shadow: 0 0 2px var(--zm-bg, #000); }
       .st { flex: none; width: 70px; margin-left: 10px; text-align: right; font-family: var(--zm-font-body); font-size: var(--zm-fs-s); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .dpop { display: none; position: absolute; left: calc(100% + 8px); top: -8px; z-index: 30; gap: 5px; background: var(--zm-card); border: 1px solid var(--zm-border); border-radius: 14px; box-shadow: var(--zm-shadow); padding: 8px; }
       .lbl:hover .dpop { display: flex; }
