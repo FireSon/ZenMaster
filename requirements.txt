@@ -1,7 +1,7 @@
 colorlog==6.12.0
 homeassistant>=2026.4.3
 pip>=26.3
-ruff==0.17.5
+ruff==0.17.6
 aiohttp
 bleak-retry-connector>=4.7.1
 voluptuous
