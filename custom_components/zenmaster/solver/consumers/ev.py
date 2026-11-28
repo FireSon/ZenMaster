@@ -56,7 +56,6 @@ class ElectricVehicle(SolverEntry, ConsumerDevice):
         self.departure_time = ""
         self.phase = Phase.all
         self.ev_charge_mode = ChargeMode.price
-        self.connected = False  # the cable, as entry_measure read it
         self._stepped = 0.0  # when on_surplus last wrote the charger
         self._written_kw = 0.0  # the last power written: the car's draw, since the cloud power lags
         self._surplus_sum, self._surplus_count = 0.0, 0  # the surplus readings since the last step
@@ -80,11 +79,7 @@ class ElectricVehicle(SolverEntry, ConsumerDevice):
     def entry_config(self, lp: LpSolver):
         self.ev_charge_mode = ChargeMode(self.ev_charge_mode)  # accept the plain int value coming from the config
         self.ev_power = lp.data(self.id + "_power", "kW")
-
-    def entry_setup(self, lp: LpSolver):
         lp.track(self.soc_entity, lambda v: setattr(self, "current_soc", v / 100.0))  # HA reports %, we hold a 0-1 fraction
-        if not self.manage:
-            return  # the handlers below follow the plan, and an unmanaged car has none
         # Solar follows the live surplus of the distribution within the quarter
         if (distribution := lp.globals.get("price_device")) is not None:
             lp.track(distribution.entities["surplus"].entity_id, self.on_surplus)
@@ -108,24 +103,18 @@ class ElectricVehicle(SolverEntry, ConsumerDevice):
             return
         await self._write(self.ev_power.data[12])
 
-    async def entry_measure(self, lp: LpSolver, now: datetime) -> None:
-        # the cable as the entity shows it now: no copy that can miss a change
-        self.connected = (s := lp.hass.states.get(self.connected_entity)) is not None and s.state == "on"
-
-    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         # every quarter the charger gets the plan of this quarter, also 0 when there is nothing to charge
         self.ev_power.data[12:] = 0.0
-        if self.connected:
+        # the cable as the entity shows it now: no copy that can miss a change
+        connected = (s := lp.hass.states.get(self.connected_entity)) is not None and s.state == "on"
+        if connected:
             self.plan(lp, now)
+        else:
+            self.entity_update("ev_charge_mode", ChargeMode.price)  # a mode holds for one session: back to the default once the cable is out
         # the status from the plan: charging this quarter, later, at its target, or nothing to do
-        self.plan_status(EntryStatus.running if self.ev_power.data[12] > 0 else EntryStatus.planned if self.ev_power.data[12:].any()
-            else EntryStatus.ready if self.connected and self.current_soc >= self.charge_target / 100 else EntryStatus.none)
-
-    async def entry_apply(self, lp: LpSolver) -> None:
-        # a mode holds for one session: back to the default once the cable is out; then the status and the charger
-        if not self.connected:
-            self.entity_update("ev_charge_mode", ChargeMode.price)
-        await super().entry_apply(lp)
+        self.status = (EntryStatus.running if self.ev_power.data[12] > 0 else EntryStatus.planned if self.ev_power.data[12:].any()
+            else EntryStatus.ready if connected and self.current_soc >= self.charge_target / 100 else EntryStatus.none)
         await self.apply_power()
 
     def plan(self, lp: LpSolver, now: datetime) -> None:

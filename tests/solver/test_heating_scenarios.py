@@ -22,7 +22,7 @@ class _Grid(SolverEntry):
         self.out = lp.data("grid_buy", "kW")
         self.buy = lp.column(tags=("supply",), dest=self.out)
 
-    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         self.buy.costs[:] = self.price
 
 
@@ -47,7 +47,7 @@ def _house_lp(price: list[float], outdoor: float, now: datetime):
     lp.temp, lp.wind, lp.sun = (lp.data(n, u, 7, source="meteo") for n, u in (("temp", "C"), ("wind", "m/s"), ("sun", "W/m2")))  # the weather the house loses heat to
     lp.temp.data[12:108] = outdoor
     lp.init([grid, h])
-    x = asyncio.run(lp.run_live(now))
+    x = asyncio.run(lp.run(now))
     return lp, grid, h, x
 
 
@@ -107,7 +107,7 @@ class _Prices(SolverEntry):
         self.solar_data = lp.solar = lp.data("solar", "kW", 7)
         self.temp = lp.temp = lp.data("temp", "C", 7)
 
-    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         self.price_buy.data[12 : 12 + len(self.buy)] = self.buy
         self.price_sell.data[12 : 12 + len(self.buy)] = self.buy
         self.solar_data.data[12 : 12 + len(self.solar)] = self.solar
@@ -132,7 +132,7 @@ def _run(h: BoilerHeatPump, buy: list[float], now: datetime, solar: list[float] 
     lp = LpSolver(track=lambda *a, **k: None, horizon=96)
     lp.hass = None  # offline: skips calibration in entry_prerun
     lp.init([_Grid([0.1] * 96), _Prices(buy, solar, outside), h])
-    asyncio.run(lp.run_live(now))
+    asyncio.run(lp.run(now))
 
 
 def _week(bargain: int | None = None, cheap_day: int | None = None) -> list[float]:
@@ -316,11 +316,7 @@ class _Hass:
         self.calls.append((domain, service, data["value"]))
 
     def async_create_task(self, coro) -> None:
-        # the fake call has nothing to wait for, so it ends on its first step; this also works inside a running loop
-        try:
-            coro.send(None)
-        except StopIteration:
-            pass
+        asyncio.run(coro)
 
 
 def test_a_setpoint_someone_else_changed_goes_back() -> None:
@@ -344,7 +340,7 @@ def _balance_kwh(sun: float, wind: float) -> float:
     lp.temp, lp.wind, lp.sun = (lp.data(n, u, 7, source="meteo") for n, u in (("temp", "C"), ("wind", "m/s"), ("sun", "W/m2")))
     lp.temp.data[12:204], lp.wind.data[12:204], lp.sun.data[12:204] = 8.0, wind, sun
     lp.init([_Grid([0.3] * lp.horizon), h])
-    x = asyncio.run(lp.run_live(datetime(2026, 11, 2, 12, 0)))
+    x = asyncio.run(lp.run(datetime(2026, 11, 2, 12, 0)))
     assert x is not None and lp._last_lp_status == 0
     return float(x[h.power.index:h.power.index + lp.horizon].sum() * 0.25)
 
@@ -367,11 +363,9 @@ def test_heat_pump_writes_the_plan_in_its_control_type() -> None:
         h.control, lp.hass.calls = control, []
         lp.hass.get = lambda entity_id, a=attributes: SimpleNamespace(state="0", attributes=a)
         h.entry_postrun(lp)
-        asyncio.run(h.entry_apply(lp))
         assert lp.hass.calls == [("number", "set_value", want)], f"{control} must write {want}"
     # every quarter is written, also when the value did not change: a device falls back to its own curve without it
     h.entry_postrun(lp)
-    asyncio.run(h.entry_apply(lp))
     assert lp.hass.calls == [("number", "set_value", 20.0)] * 2
 
 

@@ -62,9 +62,7 @@ def _ev(lp: LpSolver, mode: ChargeMode, soc: float = 0.5, target: float = 80.0, 
 
 def _plan(ev: ElectricVehicle, lp: LpSolver) -> np.ndarray:
     # one quarter run: the plan in kW for slots 12..43
-    asyncio.run(ev.entry_measure(lp, _NOW))
-    ev.entry_prerun(lp, _NOW)
-    asyncio.run(ev.entry_apply(lp))
+    asyncio.run(ev.entry_prerun(lp, _NOW))
     return ev.ev_power.data[12:44]
 
 

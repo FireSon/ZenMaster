@@ -15,11 +15,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Provides the per-phase measured background house load (via load_history) and seeds lp.l1/l2/l3 from it each tick.
 class BaseLoad(SolverEntry):
-    def __init__(self):
-        super().__init__()
-        self.profile = np.zeros((3, 7, 24))  # background load per phase, weekday and hour (kW), from load_history
-        self._loaded = None  # local date load_history last ran (None = not yet)
-
     def entry_config(self, lp: LpSolver):
         # measured background load per phase (kW), refreshed daily by load_history; 12 history + 192 future slots
         self.loads = [
@@ -29,21 +24,17 @@ class BaseLoad(SolverEntry):
             lp.data("load_l3", "kW", 2, source="ha"),
         ]
         self.load = lp.data("load", "kW", 2, source="ha")  # aggregate house load (sum l1/l2/l3) for UI/plan
+        self.profile = np.zeros((3, 7, 24))  # background load per phase, weekday and hour (kW), from load_history
+        self._loaded = None  # local date load_history last ran (None = not yet)
 
-    def entry_setup(self, lp: LpSolver):
-        # the live run reads the history again after every build
-        self.profile = np.zeros((3, 7, 24))
-        self._loaded = None
-
-    async def entry_measure(self, lp: LpSolver, now: datetime):
-        # Per tick: refresh the daily background load; the prerun seeds the per-phase load buffers from it, consumers schedule on top in their own prerun.
+    async def entry_prerun(self, lp: LpSolver, now: datetime):
+        # Per tick: refresh the daily background load, then seed the per-phase load buffers from it; consumers schedule on top in their own prerun.
         today = dt_util.as_local(now).date()
         if self._loaded is None:
             await self.load_history(lp, now)
         if self._loaded != today:  # cold start, then again at local midnight
             lp.hass.async_create_task(self.load_history(lp, now))
 
-    def entry_prerun(self, lp: LpSolver, now: datetime):
         # every coming quarter its background load from the weekday-hour profile, so the whole horizon is filled
         slot0 = int(now.timestamp()) // 900 * 900
         local = [dt_util.as_local(dt_util.utc_from_timestamp(slot0 + 900 * i)) for i in range(self.load.data.size - 12)]

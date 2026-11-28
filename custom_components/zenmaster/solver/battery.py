@@ -113,6 +113,7 @@ class DistributionEntry(SolverEntry):
     def entry_config(self, lp: LpSolver) -> None:
         # publish house-wide values to the shared globals so other entries (e.g. BaseLoad) can read them
         d = self.distribution
+        d.phase_limit_w = d.max_kw * 1000 / 3
         lp.globals["phase_limit_kw"] = d.max_kw / 3
         lp.globals["price_device"] = d  # owns the price sensors whose history feeds the price model
         lp.globals.setdefault("savings_pending", [])  # consumers append their realised shift saving here
@@ -144,7 +145,7 @@ class DistributionEntry(SolverEntry):
             stock = max(0.0, stock - discharge)
         return stock, basis, saving
 
-    async def entry_measure(self, lp: LpSolver, now: Any) -> None:
+    async def entry_prerun(self, lp: LpSolver, now: Any) -> None:
         # Once per quarter: publish the live price and settle the realised saving. The fleet is stock
         # with a weighted average cost: charging adds kWh at the price of that quarter (solar enters at
         # the export price we gave up), discharging books the difference against the price avoided.
@@ -170,7 +171,7 @@ class DistributionEntry(SolverEntry):
                 self.savings += saving
             self._counters.update(fresh)
 
-        self._now = now  # the solve clock, so entry_apply uses the same moment
+        self._now = now  # the solve clock, so entry_postrun uses the same moment
         day = str(now.date())
         if day != self._day:  # a new day starts today's realised part at zero
             self._day, self.savings_midnight = day, self.savings
@@ -181,9 +182,7 @@ class DistributionEntry(SolverEntry):
             pending.clear()
         d.entity_update("savings", self.savings)
 
-    def entry_prerun(self, lp: LpSolver, now: Any) -> None:
         # the grid per quarter: the price of a kWh in and out, and the connection as its limit both ways
-        d = self.distribution
         h = lp.horizon
         self.grid_buy.costs[:] = lp.price_buy.data[12:12 + h] * 0.25
         self.grid_sell.costs[:] = -lp.price_sell.data[12:12 + h] * 0.25
@@ -196,11 +195,6 @@ class DistributionEntry(SolverEntry):
         terminal = float(np.mean(lp.price_sell.data[12 + h : 12 + h + 16]))
         for u in self._units:
             u.prerun(h, meters, wear_mean, terminal)
-
-    def entry_setup(self, lp: LpSolver) -> None:
-        # the live distribution holds every phase to the same limit the plan uses
-        d = self.distribution
-        d.phase_limit_w = d.max_kw * 1000 / 3
 
     async def _set_optimize(self, _entity: HaSwitch, on: bool) -> None:
         # master switch: ON -> the mode select follows the solver plan each solve; OFF -> back to off (manual/HA)
@@ -314,14 +308,12 @@ class DistributionEntry(SolverEntry):
                     lp.summary.append({"code": code, "v": {"id": u.device.device_id, "name": u.device.name, "quarters": int(hits.size), "max": round(float(hits.max()), 4)}})
 
     def entry_postrun(self, lp: LpSolver) -> None:
+        d = self.distribution
         # the fleet's SoC for the chart: the units weighted by the kWh of their window
         if total := sum(u.cap for u in self._units):
             h = lp.horizon
             self._bat_soc.data[12 : 12 + h] = sum(u.cap * u.soc.dest.data[12 : 12 + h] for u in self._units) / total
         self._summarize(lp)
-
-    async def entry_apply(self, lp: LpSolver) -> None:
-        d = self.distribution
         # the plan's order per direction over AC; the distribution takes it over while optimize is on, from the next P1 tick
         if self._units:
             d.plan_rank = {True: self._rank(lp, lambda u: u.charge.dest.data), False: self._rank(lp, lambda u: u.discharge.dest.data + u.dc_out.dest.data)}

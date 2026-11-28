@@ -72,8 +72,6 @@ class BoilerHeatPump(Heating):
         self.tau_bottom = self.tau_top = 0.0  # 0 = not measured, the tau of the sensor holds there
         self.level = 1.0
         self.draw = 2.0
-        self._draw = self.draw  # the daily energy within a run: entry_prerun starts it from draw, entry_apply keeps it
-        self._decided = self._met = False  # this run decided a fill, and met its target at once
         self._levels: list = []
         # the run under way: the target, the disinfection, the fill of the day, and when the compressor came on
         self._target = 0.0
@@ -106,9 +104,6 @@ class BoilerHeatPump(Heating):
         # the phase from the config, the power column, and the sensors the tank and the model follow
         self.phase = Phase(self.phase)
         self.data = lp.data(f"{self.id}_power", "kW", 2, name=self.name, source="lp")
-
-    def entry_setup(self, lp: LpSolver) -> None:
-        # the sensors the tank and the model follow
         lp.track(self.temp_entity, self.on_temp)
         lp.track(self.power_entity, self.on_power, phase=self.phase)
         lp.track(self.bottom_entity, self.on_bottom)
@@ -251,24 +246,24 @@ class BoilerHeatPump(Heating):
     def top_after(self, T: np.ndarray, hours: float) -> float:
         # the top of these layers after that many hours of loss, each layer at its own pace, with the draw of a day at the end taken from the top
         T = mix(self._room + (T - self._room) * np.exp(-hours / self.taus()))
-        heat = self._draw
+        heat = self.draw
         while heat > 0.0 and T[-1] > _COLD + _STEP:
             heat -= (T[-1] - _COLD) / _TANK_K
             T = T + _LAYERS / self.volume * (np.r_[_COLD, T[:-1]] - T)
         return at(T, _TOP)
 
     def fill_level(self, lp: LpSolver, rest: int, outside: float) -> float:
-        # what the house drew since the last block moves the daily energy of this run; entry_apply keeps it; no fill when the top of the model holds t_min until the block of tomorrow
+        # what the house drew since the last block moves the daily energy; no fill when the top of the model holds t_min until the block of tomorrow
         if self._filled:
-            self._draw = (1.0 - _WEIGHT) * self._draw + _WEIGHT * self._tapped
+            self.draw = (1.0 - _WEIGHT) * self.draw + _WEIGHT * self._tapped
         self._filled, self._tapped = True, 0.0
         level, heat = self.fill_to(0.25 * self.block_at(lp, rest, 96, outside))
         return min(self.t_max, level) if heat else 0.0
 
-    async def entry_measure(self, lp: LpSolver, now: datetime) -> None:
+    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         # books the measured energy and schedules the daily recalibration; the energy of this step goes to the model
         kwh = self._pending_kwh
-        await super().entry_measure(lp, now)
+        await super().entry_prerun(lp, now)
         outside = lp.temp.data[12] if lp.temp is not None else 0.0
 
         # the model follows the tank, from its first reading on
@@ -277,16 +272,10 @@ class BoilerHeatPump(Heating):
             self.update_level(now, kwh, outside)
             self.layers = self._layers.round(2).tolist()
 
-    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
-        super().entry_prerun(lp, now)
-        outside = lp.temp.data[12] if lp.temp is not None else 0.0
-        self._draw, self._decided, self._met = self.draw, False, False  # the daily energy as learned so far; whether this run decided, and met its target at once
-
         # no prices or no reading: decide nothing rather than run now
         price = lp.price_buy.data[12:]  # seven days deep
         if not price[:96].any() or self._layers is None:
             return
-        self._decided = True
         reasons = lp.reasons.setdefault(self.data.id, [])  # why it fills when it does, for the explanation
 
         # the cheapest day of the disinfection band
@@ -316,18 +305,13 @@ class BoilerHeatPump(Heating):
         if self.legionella and (self._disinfect or (cheapest == 0 and price[0] <= np.min(price[:rest]))):
             self._disinfect, target = True, self.t_max
         self._target = target
-        # the fill of the day is in, and a target already met ends at once, as a reading of the tank would end it; a completed disinfection restarts the interval
-        if self._fill and self._temp0 >= self._fill:
-            self._fill = 0.0
-        if self._target and self._temp0 >= self._target:
-            if self._disinfect:
-                self.legionella_at, self._disinfect = now.timestamp(), False
-            self._target, self._met = 0.0, True
-            self.data.data[13:] = 0.0
+        self.on_temp(self._temp0)
         if target:
             reasons.append({"at": 12, "code": "boiler_disinfect" if self._disinfect else "boiler_fill", "v": {"target": round(float(target), 1)}})
 
-        # what it actually draws back onto its phase
+        # the target itself goes to the unit, so the unit stops there too; what it actually draws back onto its phase
+        self.write_setpoint(self._target if self._target else None)
+        self.status = EntryStatus.running if self._target else EntryStatus.none
         self.data.data[12] = self._meter[0] / 1000.0
 
         # the planned block ahead in the series, so the panel shows it; whether it fills is decided when it comes
@@ -340,20 +324,6 @@ class BoilerHeatPump(Heating):
             self.data.data[13:12 + self.fill_quarters(outside)] = self.max_power
         # what it draws now and the block ahead on its phase, so the plan keeps room for it
         lp.phase_add(self.phase, self.data.data[12:])
-
-    def entry_postfail(self, lp: LpSolver) -> None:
-        self.draw = self._draw  # what this run learned of the daily energy stays, also without a plan
-
-    async def entry_apply(self, lp: LpSolver) -> None:
-        # the daily energy this run learned, and the target to the unit, so the unit stops there too; a target met at once was parked first, as the reading did before
-        self.draw = self._draw
-        if not self._decided:
-            return
-        if self._met:
-            self.status = EntryStatus.none
-            self.write_setpoint(None)
-        self.write_setpoint(self._target if self._target else None)
-        self.status = EntryStatus.running if self._target else EntryStatus.none
 
     async def restore(self, hass) -> None:
         d = await self.load_params(hass)

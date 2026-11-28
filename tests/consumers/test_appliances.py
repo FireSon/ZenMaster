@@ -4,13 +4,6 @@ from types import SimpleNamespace
 from custom_components.zenmaster.solver.consumers.appliance import Appliance, _QUIET_S
 
 
-def _tick(d: Appliance, lp, now) -> None:
-    # one quarter of the live run: measure, plan, apply
-    asyncio.run(d.entry_measure(lp, now))
-    d.entry_prerun(lp, now)
-    asyncio.run(d.entry_apply(lp))
-
-
 class _Done:
     # the service call is recorded synchronously; awaiting it is a no-op
     def __await__(self):
@@ -232,7 +225,7 @@ def _latest(armed: str, slots: int = 6) -> int:
         globals={},
         place_block=lambda phase, profile, latest: (seen.setdefault("latest", latest), 0.0, 0), reasons={},
     )
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     return seen["latest"]
 
 
@@ -295,15 +288,15 @@ def test_a_lost_switch_command_is_sent_again() -> None:
     # the plan puts the block at 'now'
     lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
-    _tick(d, lp, now)
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
+    asyncio.run(d.entry_prerun(lp, now))
     assert h.turned_off == [("turn_on", "switch.dw"), ("turn_on", "switch.dw")], "een verloren commando moet opnieuw"
     assert d.busy is False, "bezig pas als er stroom loopt"
 
     d.on_power(400.0, now=1000.0)   # the appliance really starts
     assert d.busy is True and d.status.name == "running"
     h.turned_off.clear()
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert h.turned_off == [], "eenmaal draaiend hoeft er niets meer gestuurd te worden"
 
 
@@ -320,7 +313,7 @@ def test_the_switch_being_on_voids_the_arming() -> None:
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp() - 3600, now, [0.5] * 4
     lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is False and d.status.name == "none"
     assert h.turned_off == [], "met de schakelaar aan hoort er niets geschakeld te worden"
 
@@ -338,7 +331,7 @@ def test_the_switch_still_on_from_before_the_arming_keeps_it() -> None:
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp(), now, [0.5] * 4
     lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (8, 0.0, 0))
 
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is True, "het uit-commando is onderweg: de arming blijft staan"
     assert d.data.data[12 + 8] == 0.5, "en de cyclus wordt gepland"
 
@@ -354,7 +347,7 @@ def test_the_status_waits_for_real_power() -> None:
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp(), now, [0.5] * 4
     lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert d.status.name == "planned", "aangezet maar nog geen stroom: gepland, niet draaiend"
     d.on_power(400.0, now=1000.0)
     assert d.status.name == "running" and d.busy is True
@@ -373,12 +366,12 @@ def test_an_unavailable_switch_is_left_alone() -> None:
     d.armed, d.armed_at, d._last_cal, d._profile = True, now.timestamp(), now, [0.5] * 4
     lp = SimpleNamespace(hass=h, price_buy=SimpleNamespace(data=[0.2] * 250), settle=12, globals={}, reasons={}, place_block=lambda *a: (0, 0.0, 0))
 
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is True, "onbekende stand mag de arming niet wissen"
     assert h.turned_off == [], "en er wordt niets geschakeld zolang we de stand niet zien"
 
     h.states = SimpleNamespace(get=lambda eid: None)  # the entity does not exist yet right after a restart
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert h.turned_off == [], "een ontbrekende entiteit is geen bewijs dat de schakelaar uit staat"
 
 
@@ -425,7 +418,7 @@ def test_with_a_pause_button_the_start_is_paused_and_resumed() -> None:
 
     # resumed, also though a button never reads "off"
     lp, now = _planned_now(d, h)
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert h.turned_off[-1] == ("press", "button.dw_resume")
 
 
@@ -441,7 +434,7 @@ def test_with_remote_start_the_start_button_is_pressed_in_its_window() -> None:
     # remote start allowed: armed, planned now and Start pressed
     lp, now = _planned_now(d, h)
     h.states = SimpleNamespace(get=lambda eid: SimpleNamespace(state="on"))
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert d.armed is True and d.status.name == "planned" and h.turned_off == [("press", "button.dw_start")]
 
     # hands off while armed: nothing is pressed
@@ -457,7 +450,7 @@ def test_with_an_automation_nothing_is_switched() -> None:
     d.on_power(200.0, now=1000.0 + _QUIET_S)
     assert d.armed is True and d.status.name == "armed"
     lp, now = _planned_now(d, h)
-    _tick(d, lp, now)
+    asyncio.run(d.entry_prerun(lp, now))
     assert d.status.name == "planned" and h.turned_off == []
 
 

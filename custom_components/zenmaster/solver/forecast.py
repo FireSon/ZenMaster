@@ -47,8 +47,6 @@ class Forecast(SolverEntry):
         self.solar_panels = [SolarPanel(name=p.get("name", ""), power_entity=p.get("power_entity", ""), derate_entity=p.get("derate_entity", "")) for p in config.get("solar_panels", [])]
         self._poa = {}  # power_entity -> (a: np.ndarray[96] direct coeff per quarter, C: float diffuse coeff)
         self._last_cal = None  # date of the last calibration
-        self._per: dict[str, np.ndarray] = {}  # the fetched solar per meter over the plan, kW per quarter
-        self._filled = 0  # quarters of the plan the last fetch filled
 
     def entry_config(self, lp: LpSolver):
         # publish location on the shared blackboard so other entries (e.g. Heating.calibrate) can fetch weather
@@ -68,7 +66,7 @@ class Forecast(SolverEntry):
         self.wind = lp.wind = lp.data("wind", "m/s", 7, source="meteo")
         self.sun = lp.sun = lp.data("sun", "W/m2", 7, source="meteo")  # global irradiance, the solar gain of the house
 
-    async def entry_measure(self, lp: LpSolver, now: datetime):
+    async def entry_prerun(self, lp: LpSolver, now: datetime):
         # Recalibrate the POA once a day; blocking on cold start (first solve needs it), background after.
         today = now.astimezone(timezone.utc).date()
         if today != self._last_cal:
@@ -77,9 +75,13 @@ class Forecast(SolverEntry):
             else:
                 await self.calibrate(now)
 
-        # the solar per meter for the plan, kW per quarter; none filled, so a failed fetch means no solar at all
-        self._per = {meter: np.zeros(lp.horizon) for meter in self._poa}
-        self._filled = 0
+        # the meters of a battery's own panels, every meter not on the house's AC side, start at zero so a failed fetch means no solar there either;
+        # without the AC list every meter counts as house solar, as before
+        ac = lp.globals.get("solar_ac")
+        self.meters.clear()
+        for meter in self._poa:
+            if ac is not None and meter not in ac:
+                self.meters[meter] = np.zeros(lp.horizon)
 
         # Fetch the Open-Meteo 15-min forecast (7 days) and fill the buffers from 'now' forward.
         params = {
@@ -118,24 +120,12 @@ class Forecast(SolverEntry):
             q = tu.hour * 4 + tu.minute // 15  # quarter-of-day (UTC), index into the learned a[]
             per = {meter: max(0.0, a[q] * dni + C * dhi) for meter, (a, C) in self._poa.items()}
             self.solar.data[s] = sum(per.values())
-            if t < lp.horizon:
-                for meter, value in per.items():
-                    self._per[meter][t] = value
-                self._filled = t + 1
 
-    def entry_prerun(self, lp: LpSolver, now: datetime):
-        # the meters of a battery's own panels, every meter not on the house's AC side, start at zero so a failed fetch means no solar there either;
-        # without the AC list every meter counts as house solar, as before
-        ac = lp.globals.get("solar_ac")
-        self.meters.clear()
-        for meter in self._per:
-            if ac is not None and meter not in ac:
-                self.meters[meter] = np.zeros(lp.horizon)
-        # Set the LpColumn cost; a battery's own panels go to that battery, only the rest is free supply on the house
-        for t in range(self._filled):
-            for meter, series in self.meters.items():
-                series[t] = self._per[meter][t]
-            self.solar_lp.upper[t] = self.solar.data[12 + t] - sum(self._per[meter][t] for meter in self.meters)
+            # Set the LpColumn cost; a battery's own panels go to that battery, only the rest is free supply on the house
+            if t < lp.horizon:
+                for meter, series in self.meters.items():
+                    series[t] = per[meter]
+                self.solar_lp.upper[t] = self.solar.data[s] - sum(per[meter] for meter in self.meters)
 
     async def calibrate(self, now):
         # Called daily: learn the POA per production meter from the last 10 days. No history -> meter dropped.

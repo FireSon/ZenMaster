@@ -129,9 +129,6 @@ class DynamicPrice(SolverEntry):
     def entry_config(self, lp):
         self.price_buy = lp.price_buy = lp.data("price_buy", "euro", 7, source=self.provider)
         self.price_sell = lp.price_sell = lp.data("price_sell", "euro", 7, source=self.provider)
-
-    def entry_setup(self, lp):
-        # the provider that fetches the prices, made anew at every build of the live run
         providers = {c.__name__.removesuffix("Provider").casefold(): c for c in Provider.__subclasses__()}
         name = self.provider.removesuffix("Provider").casefold()
         if name not in providers and self.provider not in _SPOT_PROVIDERS and self.provider != "none":
@@ -139,7 +136,7 @@ class DynamicPrice(SolverEntry):
         self._provider = providers.get(name, providers["energycharts"])()
         self._provider.init(self)
 
-    async def entry_measure(self, lp: LpSolver, now: datetime):
+    async def entry_prerun(self, lp: LpSolver, now: datetime):
         # cold start, then refresh each new day once the market publish time has passed (to catch tomorrow)
         self.lat = lp.globals.get("latitude", 0.0)  # Forecast publishes these; needed before the refresh
         self.lon = lp.globals.get("longitude", 0.0)

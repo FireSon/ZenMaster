@@ -67,7 +67,7 @@ def test_solve_grid_supplies_committed_load() -> None:
             self.grid = lp.data("grid_buy", "kW")
             self.buy = lp.column(tags=("supply",), dest=self.grid)
 
-        def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+        async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
             self.buy.costs[:] = self.price
             self.plan = [0.0] * 96
             self.plan[40] = self.plan[41] = 4.0  # 2.0 kWh committed on L1 over two slots
@@ -78,7 +78,7 @@ def test_solve_grid_supplies_committed_load() -> None:
     e.price = [1.0] * 96
     e.price[40] = e.price[41] = 0.1
     lp.init([e])
-    x = asyncio.run(lp.run_live(datetime(2026, 6, 28, 12, 0)))
+    x = asyncio.run(lp.run(datetime(2026, 6, 28, 12, 0)))
     assert x is not None and lp._last_lp_status == 0
     assert np.allclose(e.grid.data[12:108], e.plan)  # grid buys exactly the placed load
     assert sum(e.plan) * 0.25 == pytest.approx(2.0)
@@ -96,13 +96,13 @@ def test_solve_prefers_free_solar() -> None:
             self.buy = lp.column(cost=0.3, tags=("supply",), dest=self.grid)
             self.pv = lp.column(cost=0.0, tags=("supply",), dest=self.solar)
 
-        def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+        async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
             lp.l1[10:14] = 4.0  # 4 kW load on L1 for 4 quarters
             self.pv.upper[:] = 2.5  # free solar capped at 2.5 kW
 
     e = _Stacked()
     lp.init([e])
-    x = asyncio.run(lp.run_live(datetime(2026, 6, 28, 12, 0)))
+    x = asyncio.run(lp.run(datetime(2026, 6, 28, 12, 0)))
     assert x is not None and lp._last_lp_status == 0
     assert np.allclose(e.grid.data[12 + 10:12 + 14], 1.5)  # grid covers the 1.5 kW deficit
     assert np.allclose(e.solar.data[12 + 10:12 + 14], 2.5)  # solar maxed first, it is free
