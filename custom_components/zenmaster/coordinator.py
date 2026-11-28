@@ -420,11 +420,14 @@ class Coordinator:
     async def _tick(self, now=None, rebuild: bool = False) -> None:
         # the 15-min solve tick, after a rebuild when the structure changed, both under the lock so a rebuild never swaps the columns under a running solve; on a successful solve the panel re-fetches the plan
         async with self._solve_lock:
+            # how long a run takes, rebuild included: the window around the planned run follows from it
+            start = time.monotonic()
             if rebuild:
                 self.rebuild_solver()
             if not self.distribution.planning:  # the solver is off: no plan, the fleet runs on its own control
                 return
             x = await self.solver.run(now or dt_util.now())
+            self.distribution.entity_update("run_duration", time.monotonic() - start)
         if x is not None:
             async_dispatcher_send(self.hass, f"{DOMAIN}_plan")
 

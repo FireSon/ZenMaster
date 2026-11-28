@@ -139,6 +139,7 @@ class Distribution(EntityDevice):
         HaSensor(self, "house_load", uom="W", device_class="power", state_class="measurement", aggr=True)
         HaSensor(self, "house_solar", uom="W", device_class="power", state_class="measurement", aggr=True)
         HaSensor(self, "surplus", uom="W", device_class="power", state_class="measurement")  # export plus what the fleet charges now
+        HaSensor(self, "run_duration", uom="s", device_class="duration", state_class="measurement", precision=3)  # the last solver run, rebuild included
         HaSensor(self, "grid_import", uom="W", device_class="power", state_class="measurement", aggr=True)
         HaSensor(self, "grid_export", uom="W", device_class="power", state_class="measurement", aggr=True)
         # what the P1 meter shows per phase as the distribution computes it, any brand: + import, - export
