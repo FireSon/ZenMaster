@@ -388,10 +388,14 @@ class Coordinator:
         self.persist_consumer(consumer)
         self.hass.async_create_task(self._tick())  # a row action changes no structure, so a fresh solve is enough
 
+    def measured(self) -> list:
+        # the entries the live run measures: every one in the solver, and the consumers that are not managed
+        return [self.prices, self.forecast, self.baseload, self.battery, *self.consumers]
+
     def rebuild_solver(self) -> None:
         # Columns and rows are built once from the config, so a changed setting only lands after this runs.
         # init() clears the blackboard, so everything that lives there goes back right after. The entries register
-        # their entity tracking in entry_config, so the registrations of the previous structure go first.
+        # their entity tracking in entry_setup, so the registrations of the previous structure go first.
         self.distribution.planning = self.prices.provider != "none"  # a dynamic price provider is what the solver needs
         for unsub in self._track_unsubs:
             unsub()
@@ -399,6 +403,9 @@ class Coordinator:
         # the history over the rebuild, at the first build the one the Store kept over the restart
         history = self.solver.history() or self.config.section("devices", "solver_history")
         self.solver.init([self.prices, self.forecast, self.baseload, self.battery, *[c for c in self.consumers if c.manage]])
+        # what only the live run does at a build, for every consumer: the unmanaged ones are measured too, so a test can take them along
+        for entry in self.measured():
+            entry.entry_setup(self.solver)
         self.solver.restore(history)
         self.solver.globals["request_solve"] = lambda: self.hass.async_create_task(self._tick())
         dev_solar = {getattr(d.entities.get("solar"), "entity_id", None) for d in self.distribution.devices}
@@ -426,7 +433,7 @@ class Coordinator:
                 self.rebuild_solver()
             if not self.distribution.planning:  # the solver is off: no plan, the fleet runs on its own control
                 return
-            x = await self.solver.run(now or dt_util.now())
+            x = await self.solver.run_live(now or dt_util.now(), self.measured())
             self.distribution.entity_update("run_duration", time.monotonic() - start)
         if x is not None:
             async_dispatcher_send(self.hass, f"{DOMAIN}_plan")

@@ -104,8 +104,6 @@ class Heating(SolverEntry, ConsumerDevice):
         soft = self.SOFT_FLOOR
         if soft:
             self._outdoor = lp.temp  # house loses heat to the outdoor forecast
-        lp.track(self.temp_entity, lambda v: setattr(self, "_temp0", v))  # keep the live temperature fresh
-        lp.track(self.power_entity, self.on_power, phase=self.phase)  # measured energy, for the realised saving
 
         # electrical draw column, tagged on its phase so the solver's phase-limit row includes it, capped at max_power
         if self.volume:  # a known volume gives the rise per kWh of heat exactly: a resistive element turns every kWh into heat
@@ -148,17 +146,31 @@ class Heating(SolverEntry, ConsumerDevice):
             loss = lambda t: 0.25 / self.tau * self.ambient + self.icept * 0.25 / (self.tau * self.slope)
             self._rebuild_model = lp.row_delta(lambda t1, t2: self.temp[t1] + (0.25 / self.tau - 1.0) * self.temp[t2] - 0.25 / (self.tau * self.slope) * self.power[t2], const=loss, label=("heat_balance", self.id, 1.0, "EUR/C"))
 
-    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+    def entry_setup(self, lp: LpSolver) -> None:
+        lp.track(self.temp_entity, lambda v: setattr(self, "_temp0", v))  # keep the live temperature fresh
+        lp.track(self.power_entity, self.on_power, phase=self.phase)  # measured energy, for the realised saving
+
+    async def entry_measure(self, lp: LpSolver, now: datetime) -> None:
         # The house is used as a heat buffer, so the saving is the same heat bought at a better moment:
         # the energy since the last run, at the price of its quarter, against the average buy price over the coming day.
-        if self._pending_kwh and lp.price_buy is not None:
+        # A store ZenMaster does not steer saves nothing.
+        if self.manage and self._pending_kwh and lp.price_buy is not None:
             window = lp.price_buy.data[12 : 12 + 96]
             reference = float(sum(window) / len(window)) if len(window) else 0.0
             price = float(lp.price_buy.data[lp.settle])
             if (booked := lp.globals.get("savings_pending")) is not None:
                 booked.append(self._pending_kwh * (reference - price))
             self._pending_kwh = 0.0
+        # the mass follows the measured room by its own time constant, as in the fit; the plan starts there
+        if self.SOFT_FLOOR:
+            step = min(1.0, (now - self._mass_at).total_seconds() / 3600 * self.him / self.cm) if self._mass_at else 1.0
+            self._mass0 += step * (self._temp0 - self._mass0)
+            self._mass_at = now
+        if lp.hass is not None and (self._last_cal is None or (now - self._last_cal).days >= self.CAL_DAYS):  # on cold start and every CAL_DAYS days
+            self._last_cal = now
+            lp.hass.async_create_task(self.calibrate(lp, now))
 
+    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         self._tmin = [self.t_min] * lp.horizon
         if self.SOFT_FLOOR:
             # the house floor per hour of the day, then per quarter of the plan; the hour from the real time, also when the clock changes
@@ -177,15 +189,8 @@ class Heating(SolverEntry, ConsumerDevice):
             self.temp.lower[1:] = min(self._floor, t0)  # never a bound the store cannot reach; the row pulls it back up
             if not self.SOFT_FLOOR:
                 self.temp.upper[1:] = max(self.t_max, t0)  # a store above its band cools on its own, so do not force it down
-        if self.mass is not None:  # the mass follows the measured room by its own time constant, as in the fit; the plan starts there
-            step = min(1.0, (now - self._mass_at).total_seconds() / 3600 * self.him / self.cm) if self._mass_at else 1.0
-            self._mass0 += step * (self._temp0 - self._mass0)
-            self._mass_at, self.mass.lower[0], self.mass.upper[0] = now, self._mass0, self._mass0
-        if lp.hass is None:
-            return
-        if self._last_cal is None or (now - self._last_cal).days >= self.CAL_DAYS:  # on cold start and every CAL_DAYS days
-            self._last_cal = now
-            lp.hass.async_create_task(self.calibrate(lp, now))
+        if self.mass is not None:  # the plan starts at the mass entry_measure followed
+            self.mass.lower[0], self.mass.upper[0] = self._mass0, self._mass0
 
     def entry_postrun(self, lp: LpSolver) -> None:
         if self.power is not None:
@@ -213,7 +218,8 @@ class Heating(SolverEntry, ConsumerDevice):
                 self.tau = res[2]
             # with a known volume the slope follows from tau, as in entry_config; otherwise from the fit
             self.slope = self.volume / (_TANK_K * self.tau) if self.volume else res[0]
-            self._rebuild_model()  # push the new parameters into the LP rows
+            if self.manage:  # push the new parameters into the LP rows; an unmanaged store has none, it is only measured
+                self._rebuild_model()
             if (request_solve := lp.globals.get("request_solve")) is not None:
                 request_solve()  # the standing plan was built with the old model: solve again right away
         await self.save_params(lp.hass, {"slope": self.slope, "icept": self.icept, "tau": self.tau})
@@ -241,11 +247,13 @@ class HeatingHeatPump(Heating):
         self.control_entity = ""  # the number or climate the plan of each quarter is written to
         self.control = "temperature"
         self._written = None  # the plan's last value on control_entity
+        self._plan_kw = 0.0  # this quarter's planned power, kept by entry_postrun for entry_apply
 
-    def entry_config(self, lp: LpSolver) -> None:
-        super().entry_config(lp)
-        # the device back after a restart gets the plan of this quarter at once, not at the next quarter
-        lp.track(self.control_entity, lambda _state: self._send(lp.hass, self._written) if self._written is not None else None, back=True)
+    def entry_setup(self, lp: LpSolver) -> None:
+        super().entry_setup(lp)
+        # the device back after a restart gets the plan of this quarter at once, not at the next quarter; it follows the plan, so only when managed
+        if self.manage:
+            lp.track(self.control_entity, lambda _state: self._send(lp.hass, self._written) if self._written is not None else None, back=True)
 
     def _send(self, hass, value: float) -> None:
         # the value to the number or climate: a climate takes it as its target temperature
@@ -253,16 +261,19 @@ class HeatingHeatPump(Heating):
         service, key = ("set_temperature", "temperature") if domain == "climate" else ("set_value", "value")
         hass.async_create_task(hass.services.async_call(domain, service, {"entity_id": self.control_entity, key: value}, blocking=False))
 
-    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+    async def entry_measure(self, lp: LpSolver, now: datetime) -> None:
         # the setpoint from its entity when one is linked (a climate's target, otherwise its state), else the number on the device
         state = lp.hass.states.get(self.setpoint_entity) if self.setpoint_entity and lp.hass is not None else None
         try:
             self._target = float(state.attributes.get("temperature") if state.domain == "climate" else state.state)
         except (AttributeError, TypeError, ValueError):
             self._target = self.setpoint
+        await super().entry_measure(lp, now)
+
+    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         # the day and night floors and the ceiling follow the setpoint
         self.t_min_day, self.t_min_night, self.t_max = self._target - self.day_drop, self._target - self.night_drop, self._target + self.headroom
-        await super().entry_prerun(lp, now)
+        super().entry_prerun(lp, now)
 
     def _runs(self, p: np.ndarray, mins: np.ndarray) -> np.ndarray:
         # blocks of power the MHI can make: a gap of one quarter is closed, since a restart costs more than running on
@@ -278,9 +289,14 @@ class HeatingHeatPump(Heating):
     def entry_postrun(self, lp: LpSolver) -> None:
         p = self.power.dest.data
         p[12:12 + lp.horizon] = self._runs(p[12:12 + lp.horizon], np.array(self._mins))
+        self._plan_kw = float(p[12])  # this quarter's power for the device, before the display rounding below
+        super().entry_postrun(lp)
+
+    async def entry_apply(self, lp: LpSolver) -> None:
+        await super().entry_apply(lp)
         # this quarter's plan in the type the entity takes, on its step and inside its range; written every quarter, a device falls back to its own curve without it
         if self.control_entity and lp.hass is not None and (state := lp.hass.states.get(self.control_entity)) is not None:
-            a, kw, floor = state.attributes, float(self.power.dest.data[12]), self._tmin[0]
+            a, kw, floor = state.attributes, self._plan_kw, self._tmin[0]
             delta = max(0.0, float(self.temp.dest.data[13]) - floor) if kw else 0.0  # the room the plan heats to by the end of this quarter; none in a quarter _runs dropped
             value = {"power": kw * (1000.0 if a.get("unit_of_measurement") == "W" else 1.0), "capacity": 100.0 * kw / self.max_power, "delta": delta, "temperature": floor + delta}[self.control]
             step = a.get("step") or a.get("target_temp_step") or 0.5
@@ -288,13 +304,13 @@ class HeatingHeatPump(Heating):
             value = min(max(value, a.get("min", a.get("min_temp", value))), a.get("max", a.get("max_temp", value)))
             self._written = value
             self._send(lp.hass, value)
-        super().entry_postrun(lp)
 
     async def calibrate(self, lp: LpSolver, now: datetime) -> None:
         # every week the house as air and mass from the last year of heating days
         if (fit := await fit_house(lp.hass, self.power_entity, self.temp_entity, lp.globals.get("solar_entities", []), lp.globals.get("latitude", 0.0), lp.globals.get("longitude", 0.0), self.phase)) is not None:
             self.ci, self.cm, self.him, self.ua, self.ua_wind, self.sun_gain, self.q_int = fit
-            self._rebuild_model()
+            if self.manage:  # an unmanaged house has no rows, it is only measured
+                self._rebuild_model()
             await self.save_params(lp.hass, {k: getattr(self, k) for k in ("ua", "ua_wind", "sun_gain", "q_int", "ci", "cm", "him")})
             if (request_solve := lp.globals.get("request_solve")) is not None:
                 request_solve()

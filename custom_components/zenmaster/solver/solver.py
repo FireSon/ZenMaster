@@ -56,6 +56,7 @@ class Action:
 class SolverEntry:
     def __init__(self):
         self._status: EntryStatus = EntryStatus.none
+        self._status_due = False  # a status the computing set, still to be published by entry_apply
         self.phase: Phase = Phase.all
         self.power_entity: str = ""
         self.hass = None
@@ -75,7 +76,7 @@ class SolverEntry:
     @status.setter
     def status(self, value: EntryStatus) -> None:
         # entries that are also an EntityDevice publish every change straight to their own sensor
-        self._status = value
+        self._status, self._status_due = value, False
         if getattr(self, "entities", None) is not None:
             self.entity_update("state", value.name)
 
@@ -99,11 +100,26 @@ class SolverEntry:
     def entry_config(self, lp: LpSolver):
         pass
 
-    async def entry_prerun(self, lp: LpSolver, now: datetime):
+    def entry_setup(self, lp: LpSolver):
+        pass  # the live run only, after building: register the handlers, start what fetches; a test solver never calls it
+
+    async def entry_measure(self, lp: LpSolver, now: datetime):
+        pass  # the live run only, before computing: book what was measured, read the situation from HA, fetch, start a calibration
+
+    def entry_prerun(self, lp: LpSolver, now: datetime):
         pass
 
     def entry_postrun(self, lp: LpSolver):
         pass
+
+    async def entry_apply(self, lp: LpSolver):
+        # the live run only, after computing: what the plan writes to devices and publishes; a status the computing set goes out here
+        if self._status_due:
+            self.status = self._status
+
+    def plan_status(self, value: EntryStatus) -> None:
+        # the status as computed: kept on the entry, published by entry_apply of the live run only
+        self._status, self._status_due = value, True
 
     def entry_postfail(self, lp: LpSolver):
         pass  # the solve gave no plan; an entry that acts on the last plan recovers here
@@ -224,7 +240,25 @@ class LpSolver:
             factors = {c: (1.0 if p == ph else 1.0 / 3) for c, p in self._phase_columns if p in (0, ph)}
             self.row_quarter(factors, hi=lambda t, n=name: max(0.0, self.limit - getattr(self, n)[t]), label=("phase", name.upper(), 4.0, "EUR/kWh"))
 
-    async def run(self, now):
+    async def run_live(self, now, measured=None) -> np.ndarray | None:
+        # the run that drives the house: shift, measure every entry that is measured (also the unmanaged consumers; default the entries), compute, then apply or recover
+        self.advance(now)
+        for entry in self._entries if measured is None else measured:
+            try:
+                await entry.entry_measure(self, now)
+            except Exception:
+                _LOGGER.exception("entry_measure failed for %s", type(entry).__name__)
+        if (x := await self.run(now)) is None:
+            self._postfail()
+            return None
+        for entry in self._entries:
+            try:
+                await entry.entry_apply(self)
+            except Exception:
+                _LOGGER.exception("entry_apply failed for %s", type(entry).__name__)
+        return x
+
+    def advance(self, now) -> None:
         # shift the history window one slot per elapsed quarter (re-runs within the same quarter don't shift)
         slot = int(now.timestamp()) // 900
         elapsed = max(0, slot - self._last_slot) if self._last_slot is not None else 0
@@ -233,6 +267,14 @@ class LpSolver:
         self.settle = 12 - min(elapsed, 12)
         self._last_slot = slot
 
+    async def run(self, now) -> np.ndarray | None:
+        # only the computing: prepare and finish here, the solve itself in an executor thread
+        if (solve := self.prepare(now)) is None:
+            return None
+        return self.finish(*await asyncio.get_running_loop().run_in_executor(None, solve))
+
+    def prepare(self, now) -> Callable | None:
+        # the preruns and the matrix; gives the solve to run, or None when there is nothing to solve
         # Create the arrays
         h = self.horizon
         self.l1 = np.zeros(h)
@@ -255,13 +297,12 @@ class LpSolver:
         # per quarter: only re-evaluate and solve; columns/rows were already built once in init()
         for entry in self._entries:
             try:
-                await entry.entry_prerun(self, now)
+                entry.entry_prerun(self, now)
             except Exception:
                 _LOGGER.exception("entry_prerun failed for %s", type(entry).__name__)
 
         if self.price_buy is not None and not self.price_buy.data[12 : 12 + h].any():
             _LOGGER.warning("no buy prices available, skipping solve")
-            self._postfail()
             return None
 
         inf = highspy.kHighsInf
@@ -300,11 +341,14 @@ class LpSolver:
             duals = (np.asarray(sol.row_dual, float), np.asarray(sol.col_dual, float)) if sol.dual_valid else None
             return solver.getModelStatus(), np.asarray(sol.col_value, float), duals
 
-        status, x, self.duals = await asyncio.get_running_loop().run_in_executor(None, solve)
+        return solve
+
+    def finish(self, status, x, duals) -> np.ndarray | None:
+        # the solution into the series and the postruns; None when the solve gave no plan
+        self.duals = duals
         self._last_lp_status = 0 if status == highspy.HighsModelStatus.kOptimal else 1
         if self._last_lp_status != 0:
             _LOGGER.warning("LP solve not optimal: %s", status)
-            self._postfail()
             return None
         for col in self._columns:
             if col.dest is not None:

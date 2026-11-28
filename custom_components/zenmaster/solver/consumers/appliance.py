@@ -82,6 +82,8 @@ class Appliance(SolverEntry, ConsumerDevice):
         self._cycle_kwh = 0.0  # measured energy of the running cycle
         self._cycle_cost = 0.0  # that energy priced at the quarter it was used in
         self._direct_until = 0.0  # until when a start runs at once instead of waiting for its window
+        self._switch_state = ""  # the switch as entry_measure read it: on, off, or "" when unknown
+        self._switch_on = False  # the plan wants the appliance running now: entry_apply switches it on
 
     def entity_create(self) -> None:
         # the direct-start switch beside the settings; it ends on its own after _DIRECT_S
@@ -133,6 +135,8 @@ class Appliance(SolverEntry, ConsumerDevice):
 
     def entry_config(self, lp: LpSolver) -> None:
         self.data = lp.data(self.id + "_power", "kW", 2, source="lp")   # placed profile (12 history + 192)
+
+    def entry_setup(self, lp: LpSolver) -> None:
         lp.track(self.power_entity, self.on_power, phase=self.phase)
         lp.track(self.status_entity, self.on_status, raw=True)
 
@@ -179,16 +183,21 @@ class Appliance(SolverEntry, ConsumerDevice):
         if self.on_action is not None:
             self.hass.async_create_task(self.on_action(self, "armed"))
 
-    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
-        # the direct start ends after its quarter of an hour; what started in it runs on
-        if self._direct_until and time.time() >= self._direct_until:
-            self._direct_until = 0.0
-            self.entity_update("direct", False)
-
+    async def entry_measure(self, lp: LpSolver, now: datetime) -> None:
+        # the switch as HA shows it: the plan reads it, and an unmanaged appliance is only measured, nothing more
+        state = lp.hass.states.get(self.switch_entity) if self._switched and lp.hass is not None else None
+        self._switch_state = state.state if state is not None else ""
         # weekly (and cold-start) recalibration of the cycle's power profile from history
         if lp.hass is not None and (self._last_cal is None or (now - self._last_cal).days >= 7):
             self._last_cal = now
             lp.hass.async_create_task(self.calibrate(lp, now))
+        if not self.manage:
+            return
+
+        # the direct start ends after its quarter of an hour; what started in it runs on
+        if self._direct_until and time.time() >= self._direct_until:
+            self._direct_until = 0.0
+            self.entity_update("direct", False)
 
         # book the measured energy at the price of the quarter it was used in, and remember the price
         # of the quarter the cycle was armed in: that is what it would have cost without shifting
@@ -212,10 +221,8 @@ class Appliance(SolverEntry, ConsumerDevice):
 
         # armed means we cut the power; with the switch on there is nothing to wait for, so the flag is void.
         # unavailable says nothing (the switch comes back late after a restart), so then we neither void nor act.
-        state = lp.hass.states.get(self.switch_entity) if self._switched and lp.hass is not None else None
-        switch = state.state if state is not None else ""
         # turned on after the arming: the user let it run. Still on from before is our switch-off on its way
-        if self.armed and switch == "on" and state.last_changed.timestamp() > self.armed_at:
+        if self.armed and self._switch_state == "on" and state.last_changed.timestamp() > self.armed_at:
             self.armed = False
             if not self.busy:
                 self.status = EntryStatus.none
@@ -228,6 +235,7 @@ class Appliance(SolverEntry, ConsumerDevice):
         if self.armed and not self.busy and self.status is EntryStatus.none:
             self.status = EntryStatus.armed
 
+    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
         # plan this cycle in its cheapest window when armed; baseload has already seeded the phase loads
         self.data.data[12:] = 0.0
         if self.armed:
@@ -255,10 +263,15 @@ class Appliance(SolverEntry, ConsumerDevice):
             lp.reasons[self.data.id] = [{"at": 12 + (start or 0), "code": "appliance_window" if start is not None else "appliance_no_window", "v": {"price": round(float(price), 4), "deadline": int(now.timestamp()) // 900 * 900 + 900 * latest, "rule": rule, "skipped": int(skipped)}}]
         # the plan wants it on now: keep asking until the appliance actually draws, so a command lost while the
         # switch was unavailable is simply sent again. busy follows the measurement, in on_power.
-        if self.manage and self.armed and not self.busy and self.data.data[12] > 0 and (switch == "off" or self.switch_type in ("pause", "remote") or not self._switched):
-            self.status = EntryStatus.planned  # running only once power is actually measured, in on_power
-            if self._switched:
-                await self._switch(lp.hass, True)
+        self._switch_on = self.manage and self.armed and not self.busy and self.data.data[12] > 0 and (self._switch_state == "off" or self.switch_type in ("pause", "remote") or not self._switched)
+        if self._switch_on:
+            self.plan_status(EntryStatus.planned)  # running only once power is actually measured, in on_power
+
+    async def entry_apply(self, lp: LpSolver) -> None:
+        # the status the plan gave, and the switch on when the plan wants it running now
+        await super().entry_apply(lp)
+        if self._switch_on and self._switched:
+            await self._switch(lp.hass, True)
 
     async def command(self, hass, action: str) -> None:
         if action == "start":

@@ -40,17 +40,22 @@ class _World(SolverEntry):
         lp.temp, lp.wind, lp.sun = (lp.data(n, u, 7) for n, u in (("temp", "C"), ("wind", "m/s"), ("sun", "W/m2")))
         self.solar_lp = lp.column(hi=0.0, tags=("supply",))
 
-    async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
-        rng = np.random.default_rng(7)
+    async def entry_measure(self, lp: LpSolver, now: datetime) -> None:
+        # what the price and forecast entries fetch when the live run measures
         q = np.arange(self.price_buy.data.size)
-        self.price_buy.data[:] = 0.25 + 0.08 * np.sin(q / 96 * 2 * np.pi) + 0.02 * rng.random(q.size)
+        self.price_buy.data[:] = 0.25 + 0.08 * np.sin(q / 96 * 2 * np.pi) + 0.02 * np.random.default_rng(7).random(q.size)
         self.price_sell.data[:] = self.price_buy.data - 0.12
         self.solar.data[:] = np.maximum(0.0, 3.0 * np.sin((q % 96) / 96 * 2 * np.pi - 1.0))
         lp.temp.data[:], lp.wind.data[:], lp.sun.data[:] = 4.0 + 3.0 * np.sin(q / 96 * 2 * np.pi), 3.0, 50.0
+        lp.globals["price_valid"] = True  # so the fleet publishes its prices, as with a real provider
+
+    def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+        # what the forecast and base load entries compute from that: the free solar and the base load per phase
+        rng = np.random.default_rng(7)
+        rng.random(self.price_buy.data.size)  # the draws the prices took, so the loads stay the numbers of the reference
         self.solar_lp.upper[:] = self.solar.data[12 : 12 + lp.horizon]
         for load in (lp.l1, lp.l2, lp.l3):
             load[:] = 0.15 + 0.1 * rng.random(lp.horizon)
-        lp.globals["price_valid"] = True  # so the fleet publishes its prices, as with a real provider
 
 
 class _Done:
@@ -96,7 +101,7 @@ def _plain(value):
     return repr(value)
 
 
-def _build(out: list, plugged: bool):
+def _build(out: list, plugged: bool, unmanaged: str = ""):
     # the real classes for heating, pool, electric boiler, heat pump boiler, EV, appliance and four batteries
     hass = _Hass(out, plugged)
     note = lambda name: lambda key, value: out.append(["entity", name, key, value])
@@ -127,13 +132,18 @@ def _build(out: list, plugged: bool):
     consumers = [house, pool, tank, dhw, ev, wash]
     for c in consumers:
         c.entities = {}  # so a status change publishes, as on a real device
+        c.manage = c.id != unmanaged
 
+    # built as the coordinator builds the live solver: the managed entries, then what only the live run sets up, for every entry
     lp = LpSolver(track=lambda *a, **k: None, horizon=192)
     lp.hass = hass
-    lp.init([_World(), fleet, *consumers])
+    entries = [_World(), fleet, *consumers]
+    lp.init([e for e in entries if e.manage])
+    for entry in entries:
+        entry.entry_setup(lp)
     ev.current_soc = 0.4
     dhw.on_temp(44.0)
-    return lp, dist, bats
+    return lp, dist, bats, entries
 
 
 def _scenario(monkeypatch, plugged: bool) -> list:
@@ -142,18 +152,31 @@ def _scenario(monkeypatch, plugged: bool) -> list:
     clock = [_NOW.timestamp()]
     monkeypatch.setattr(time, "time", lambda: clock[0])
     monkeypatch.setattr(EntityDevice, "entity_update", lambda self, key, value: out.append(["entity", getattr(self, "id", ""), key, value]))
-    lp, dist, bats = _build(out, plugged)
+    lp, dist, bats, entries = _build(out, plugged)
     runs = []
     for i in range(_RUNS):
         now = _NOW + timedelta(minutes=15 * i)
         clock[0] = now.timestamp()
         out.clear()
-        x = asyncio.run(lp.run(now))
+        x = asyncio.run(lp.run_live(now, entries))
         assert x is not None, "no plan"
         shared = {"phase_limit_w": dist.phase_limit_w, "plan_rank": {str(k): {b.device_id: v for b, v in r.items()} for k, r in dist.plan_rank.items()}, "individual": {b.device_id: b.individual for b in bats}}
         calls = sorted(json.dumps(o, sort_keys=True, default=_plain) for o in out)
         runs.append(json.loads(json.dumps({"plan": lp.plan(), "outside": calls, "shared": shared}, sort_keys=True, default=_plain)))
     return runs
+
+
+def test_unmanaged_consumer_is_measured(monkeypatch) -> None:
+    # a car ZenMaster does not steer: the live run reads its cable, and nothing goes out for it
+    out: list = []
+    monkeypatch.setattr(time, "time", lambda: _NOW.timestamp())
+    monkeypatch.setattr(EntityDevice, "entity_update", lambda self, key, value: out.append(["entity", getattr(self, "id", ""), key, value]))
+    lp, dist, bats, entries = _build(out, True, unmanaged="ev")
+    ev = next(e for e in entries if getattr(e, "id", "") == "ev")
+    out.clear()
+    assert asyncio.run(lp.run_live(_NOW, entries)) is not None
+    assert ev.connected and ev not in lp._entries
+    assert not [o for o in out if (o[0] == "entity" and o[1] == "ev") or (o[0] == "call" and o[3].get("entity_id") == "number.charge")]
 
 
 def test_reference_run(monkeypatch) -> None:

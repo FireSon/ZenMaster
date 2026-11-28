@@ -468,7 +468,9 @@ def _postrun(dist: Distribution, charge: list[float], discharge: list[float], pr
     b = dist.solver_entry
     b._bat_charge, b._bat_discharge = SimpleNamespace(dest=SimpleNamespace(data=bc)), SimpleNamespace(dest=SimpleNamespace(data=bd))
     b.grid_buy, b.grid_sell = SimpleNamespace(dest=SimpleNamespace(data=bc)), SimpleNamespace(dest=SimpleNamespace(data=bd))
-    b.entry_postrun(SimpleNamespace(price_buy=SimpleNamespace(data=p), price_sell=SimpleNamespace(data=p), horizon=96, summary=[], duals=None, _last_slot=0))
+    lp = SimpleNamespace(price_buy=SimpleNamespace(data=p), price_sell=SimpleNamespace(data=p), horizon=96, summary=[], duals=None, _last_slot=0)
+    b.entry_postrun(lp)
+    asyncio.run(b.entry_apply(lp))
     return dist.entities["savings_today"].state
 
 
@@ -580,14 +582,14 @@ def _solve(dist: Distribution, buy: list[float], sell: list[float], meters: dict
             lp.price_buy, lp.price_sell = lp.data("price_buy", "euro", 2), lp.data("price_sell", "euro", 2)
             lp.globals["solar_meters"] = meters or {}
 
-        async def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
+        def entry_prerun(self, lp: LpSolver, now: datetime) -> None:
             lp.price_buy.data[12 : 12 + len(buy)] = buy
             lp.price_sell.data[12 : 12 + len(sell)] = sell
             if load is not None:
                 lp.l1[:] += load
 
     lp.init([_Inputs(), dist.solver_entry])
-    assert asyncio.run(lp.run(datetime(2026, 1, 1, 12, 0))) is not None and lp._last_lp_status == 0
+    assert asyncio.run(lp.run_live(datetime(2026, 1, 1, 12, 0))) is not None and lp._last_lp_status == 0
 
 
 def test_a_solve_without_prices_holds_the_fleet_at_zero_while_optimize_is_on() -> None:
@@ -603,7 +605,7 @@ def test_a_solve_without_prices_holds_the_fleet_at_zero_while_optimize_is_on() -
             lp.price_buy, lp.price_sell = lp.data("price_buy", "euro", 2), lp.data("price_sell", "euro", 2)
 
     lp.init([_NoPrices(), dist.solver_entry])
-    assert asyncio.run(lp.run(datetime(2026, 1, 1, 12, 0))) is None
+    assert asyncio.run(lp.run_live(datetime(2026, 1, 1, 12, 0))) is None
     assert dist.mode == DistributionMode.OFF and d1.state is DeviceState.ACTIVE
     tick(dist, 0, 1000.0)
     assert d1.power_setpoint == 0 and d1.state is DeviceState.ACTIVE and d1.heard == DistributionMode.OFF
