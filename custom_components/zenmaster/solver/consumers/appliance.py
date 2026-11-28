@@ -287,10 +287,13 @@ class Appliance(SolverEntry, ConsumerDevice):
             if self._switched:
                 await self._switch(hass, False)
         elif action == "arm":
-            # armed by an automation or by hand, for an appliance that waits without drawing (a remote start): nothing is switched
+            # armed by an automation or by hand: it waits for its window, so it is not busy; a plug is cut and a pause/resume appliance paused, else it runs on
             self.armed = True
+            self.busy = False
             self.armed_at = time.time()
             self.status = EntryStatus.armed
+            if self.switch_type in ("plug", "pause") and self._switched:
+                await self._switch(hass, False)
         elif action == "skip":
             self.armed = False
             self.busy = False

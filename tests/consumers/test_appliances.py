@@ -464,8 +464,24 @@ def test_with_an_automation_nothing_is_switched() -> None:
 def test_the_arm_action_arms_without_switching() -> None:
     # an appliance that waits without drawing (a remote start) is armed by the button an automation presses
     d, h = _dw()
+    d.switch_type = "remote"
     asyncio.run(d.command(h, "arm"))
     assert d.armed is True and d.armed_at > 0 and d.status.name == "armed" and h.turned_off == []
+
+def test_the_arm_action_cuts_a_plug_and_ends_busy() -> None:
+    # a plug appliance armed by the button is cut, so it waits for its window instead of running on
+    d, h = _dw()
+    asyncio.run(d.command(h, "start"))
+    asyncio.run(d.command(h, "arm"))
+    assert d.armed is True and d.busy is False and d.status.name == "armed" and h.turned_off[-1] == ("turn_off", "switch.dw")
+
+
+def test_the_arm_action_pauses_a_pause_resume_appliance() -> None:
+    # a pause/resume appliance armed by the button is paused, so it waits for its window instead of running on
+    d, h = _dw()
+    d.switch_type, d.switch_entity, d.pause_entity = "pause", "button.dw_resume", "button.dw_pause"
+    asyncio.run(d.command(h, "arm"))
+    assert d.armed is True and d.busy is False and h.turned_off == [("press", "button.dw_pause")]
 
 
 def test_the_program_duration_sets_the_cycle_length() -> None:
